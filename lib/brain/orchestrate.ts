@@ -161,7 +161,7 @@ async function groundedSay(question: string, facts: string, ctx: BrainContext): 
 // Reliable detection of "show me a card about a topic" questions, so we don't
 // depend on the small router model remembering to use the fact path.
 const FACTUAL_LEAD =
-  /^(tell me (more )?about|tell me|what is|what are|what's|whats|who is|who's|whos|who are|who was|who were|explain|describe|where is|where are|when was|when is|when did|how (tall|big|old|far|deep|long|high|heavy) is|give me (some )?(info|information|facts) (on|about))\b/i;
+  /^(tell me (more )?about|tell me|what is|what are|what's|whats|who is|who's|whos|who are|who was|who were|explain|describe|where is|where are|when was|when is|when did|how (tall|big|old|far|deep|long|high|heavy) is|give me (some )?(info|information|facts) (on|about)|show me|show|find me|find|i want to see|let me see|can you show( me)?|get me)\b/i;
 const MATHISH =
   /(\d+\s*[+\-*/×^]\s*\d+)|\b(plus|minus|times|divided by|multiplied|calculate|solve|derivative|integral|equation|square root|percent of)\b/i;
 const PERSONAL = /\b(your|my)\b|\bthe (time|date|day|weather)\b/i;
@@ -188,7 +188,9 @@ function looksCurrent(text: string): boolean {
 function extractTopic(text: string): string {
   const t = text.trim().replace(/[?.!]+$/, "");
   const m = t.match(FACTUAL_LEAD);
-  const topic = (m ? t.slice(m[0].length) : t).replace(/^\s+/, "");
+  let topic = (m ? t.slice(m[0].length) : t).replace(/^\s+/, "");
+  // Strip media phrasing ("a photo of", "a video of", …) → just the subject.
+  topic = topic.replace(/^(a |an |the |some )?(photo|picture|image|video|clip|pic|footage)s?\s+of\s+/i, "");
   return topic || t;
 }
 
@@ -409,17 +411,19 @@ State only established facts — never predictions, rumours, or opinions as fact
   // Resolve each beat's media in parallel — a real video or image from the best
   // available source. Only attach an entity if media actually resolved (so the
   // UI never shows a placeholder / initials).
+  const topicFallback = wiki?.imageUrl; // last-resort image so no beat is blank
   const beats = await Promise.all(
     object.beats.map(async (b) => {
       if (!b.media) return { say: b.say };
       const m = await resolveBeatMedia(b.media);
-      if (!m.imageUrl && !m.videoUrl) return { say: b.say };
+      const imageUrl = m.videoUrl ? undefined : m.imageUrl ?? topicFallback;
+      if (!imageUrl && !m.videoUrl) return { say: b.say };
       return {
         say: b.say,
         entity: {
           name: b.media.label,
           caption: b.media.label,
-          imageUrl: m.imageUrl,
+          imageUrl,
           videoUrl: m.videoUrl,
           poster: m.poster,
         },
@@ -531,9 +535,11 @@ Rules:
 - A clear request for a DIFFERENT complete topic, OR a follow-up clearly RELATED to "${topic}" → "explain" with "topic" set (we rebuild fresh — no blending).
 - Just a short bare new subject unrelated to "${topic}" (e.g. only "North Korea") → "ask_switch"; write "say" as a brief question confirming they want to move to it (e.g. "Want me to switch over to North Korea?"). Leave "topic" empty.
 - If you just asked whether to switch and they AGREE (yes/sure/go ahead) → "explain" with "topic" = the subject you offered. If they DECLINE (no/not now) → "continue" with a brief "okay, staying here" in "say".
-- A reaction or comment (e.g. "I love this", "thanks", or they dislike it) → "react"; "say" = a brief warm acknowledgement, and if they're unhappy, ask what they'd like instead.
+- A reaction or comment (e.g. "I love this", "thanks", or they dislike it) → "react"; "say" = a VERY brief warm acknowledgement (one short sentence). If they're unhappy, ask what they'd like instead.
+- "continue" / "carry on" / "keep going" / "where were you" → "continue" with "say" = a 2-4 word lead-in like "Sure, picking it up.". The explainer resumes automatically afterwards — do NOT re-explain anything.
 - A math problem → "math" ("topic"=the problem). A flag game request → "flags". Account actions → "signup"/"login".
-- Otherwise smalltalk → "chat" with a short "say".`;
+- Otherwise smalltalk → "chat" with a short "say".
+IMPORTANT: ask_switch / continue / react / chat replies must be SHORT acknowledgements only — NEVER give facts, opinions, or explanations in them. Anything informational MUST be "explain" so it gets a card and media.`;
   try {
     const { text } = await generateText({
       model: MODELS.fast(),
@@ -632,11 +638,15 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
           return { say: plan.say || "Let's set up your account.", auth: "signup", expectsInput: "none" };
         case "login":
           return { say: plan.say || "Welcome back.", auth: "login", expectsInput: "none" };
-        // ask_switch / continue / react / chat → short reply, KEEP current content.
+        case "ask_switch":
+          // Ask, keep content, and WAIT for the answer (no resume).
+          return { say: plan.say || "Want me to switch to that?", keep: true, expectsInput: "voice" };
+        // continue / react / chat → brief reply, KEEP content, then RESUME where Isaac left off.
         default:
           return {
-            say: plan.say || "Got it — what would you like to explore?",
+            say: plan.say || "Got it.",
             keep: true,
+            resume: true,
             expectsInput: "voice",
           };
       }

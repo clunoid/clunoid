@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { SpeechPlayer } from "@/lib/voice/speech";
-import type { Scene, Experience } from "@/lib/brain/scene";
+import type { Scene, Experience, ExplainerExperience } from "@/lib/brain/scene";
 import type { BrainRequest, Turn } from "@/lib/brain/types";
 import {
   autocorrectCountry,
@@ -132,12 +132,21 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
     getPlayer(set).stop();
   }
 
+  // Narrate an explainer beat-by-beat from `start` (visuals sync to each beat).
+  async function playExplainerFrom(exp: ExplainerExperience, start: number, seq: number) {
+    for (let i = Math.max(0, start); i < exp.beats.length; i++) {
+      if (seq !== playSeq) return; // superseded / interrupted
+      set({ caption: exp.beats[i].say, spokenChars: 0, explainerIndex: i, isaac: "speaking" });
+      await getPlayer(set).play(exp.beats[i].say, (c) => set({ spokenChars: c }));
+    }
+  }
+
   async function applyScene(scene: Scene) {
     const seq = ++playSeq;
     const exp = scene.experience ?? null;
-    const isExplainer = exp?.type === "explainer";
+    const newExplainer = !scene.keep && exp?.type === "explainer" ? exp : null;
     set((s) => ({
-      caption: isExplainer && exp.beats[0] ? exp.beats[0].say : scene.say,
+      caption: newExplainer ? newExplainer.beats[0]?.say ?? scene.say : scene.say,
       spokenChars: 0,
       explainerIndex: scene.keep ? s.explainerIndex : 0,
       guessFeedback: null,
@@ -151,15 +160,16 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
       authMode: scene.auth ?? s.authMode,
     }));
 
-    if (isExplainer) {
-      // Play beats in sequence; each beat's visual appears as Isaac speaks it.
-      for (let i = 0; i < exp.beats.length; i++) {
-        if (seq !== playSeq) return; // superseded / interrupted
-        set({ caption: exp.beats[i].say, spokenChars: 0, explainerIndex: i });
-        await getPlayer(set).play(exp.beats[i].say, (c) => set({ spokenChars: c }));
-      }
+    if (newExplainer) {
+      await playExplainerFrom(newExplainer, 0, seq);
     } else {
+      // A short interactive reply (acknowledgement / question).
       await getPlayer(set).play(scene.say, (chars) => set({ spokenChars: chars }));
+      // Then pick up the explainer exactly where Isaac left off (continue / react).
+      if (scene.resume && seq === playSeq) {
+        const cur = get().experience;
+        if (cur?.type === "explainer") await playExplainerFrom(cur, get().explainerIndex, seq);
+      }
     }
     if (seq === playSeq) set({ isaac: "idle" });
   }

@@ -95,6 +95,8 @@ export const sceneSchema = z.object({
   clear: z.boolean().optional(),
   /** If true, keep the current experience on screen (a short interactive reply). */
   keep: z.boolean().optional(),
+  /** If true, after this short reply, resume the current explainer where Isaac left off. */
+  resume: z.boolean().optional(),
   /** What kind of input Isaac is now waiting for. */
   expectsInput: z.enum(["voice", "text", "choice", "none"]).default("voice"),
   /** Whether Isaac wants to trigger the auth modal. */
