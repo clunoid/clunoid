@@ -22,7 +22,8 @@ export function Stage() {
   const [interim, setInterim] = useState("");
   const [typed, setTyped] = useState("");
   const [micOn, setMicOn] = useState(false);
-  const bargeRef = useRef(0);
+  const bufferRef = useRef(""); // accumulates the user's full utterance
+  const silenceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     getSupabaseBrowser()
@@ -45,42 +46,26 @@ export function Stage() {
   }
 
   const { supported, enable, disable } = useSpeechInput({
-    // The recognizer stays on continuously. Two guards keep Isaac's own voice
-    // out: (1) ignore everything while he's speaking/thinking, and (2) reject any
-    // transcript that matches what he's saying (echo) — for input AND captions.
+    // Accumulate the user's FULL utterance (however short or long) and submit it
+    // only after a brief pause — Clunoid listens patiently until they're done.
+    // Isaac's own voice is kept out: ignored while he speaks, and echo-filtered.
     onFinal: (t) => {
       const st = useClunoid.getState();
       if (st.isaac !== "idle" || st.isEcho(t)) return;
-      handleInput(t);
+      bufferRef.current = (bufferRef.current + " " + t).trim();
+      setInterim(bufferRef.current);
+      resetSilence();
     },
     onInterim: (t) => {
       const st = useClunoid.getState();
       if (st.isaac !== "idle" || st.isEcho(t)) return;
-      setInterim(t);
+      setInterim((bufferRef.current + " " + t).trim());
+      resetSilence();
     },
   });
 
-  const handleLevel = useCallback(
-    (v: number) => {
-      setMicLevel(v);
-      const st = useClunoid.getState();
-      if (st.isaac === "speaking") {
-        // High bar so Isaac's own audio leaking into the mic can't trigger a
-        // false interrupt — only loud, sustained user speech barges in.
-        if (v > 0.3) {
-          if (++bargeRef.current >= 10) {
-            bargeRef.current = 0;
-            st.interrupt();
-          }
-        } else {
-          bargeRef.current = Math.max(0, bargeRef.current - 1);
-        }
-      } else {
-        bargeRef.current = 0;
-      }
-    },
-    [setMicLevel]
-  );
+  // Orb ripples react to the user's voice while they speak.
+  const handleLevel = useCallback((v: number) => setMicLevel(v), [setMicLevel]);
 
   useMicLevel(started && micOn, handleLevel);
 
@@ -104,22 +89,45 @@ export function Stage() {
     disable();
   }, [supported, micOn, isaac, enable, disable]);
 
-  function meetIsaac() {
-    greet();
-    if (supported) {
-      enable();
-      setMicOn(true);
+  // After the user pauses, submit the whole utterance and auto-mute (mic returns
+  // to muted; they tap to talk again).
+  function resetSilence() {
+    if (silenceRef.current) clearTimeout(silenceRef.current);
+    silenceRef.current = setTimeout(finishUtterance, 1700);
+  }
+  function finishUtterance() {
+    if (silenceRef.current) {
+      clearTimeout(silenceRef.current);
+      silenceRef.current = undefined;
     }
+    const text = bufferRef.current.trim();
+    bufferRef.current = "";
+    setInterim("");
+    disable();
+    setMicOn(false); // auto-mute once they're done
+    setMicLevel(0);
+    if (text) handleInput(text);
+  }
+
+  function meetIsaac() {
+    greet(); // mic stays MUTED by default — the user taps the mic to talk.
   }
 
   function toggleMic() {
     if (micOn) {
+      if (silenceRef.current) clearTimeout(silenceRef.current);
+      bufferRef.current = "";
+      setInterim("");
       disable();
       setMicOn(false);
       setMicLevel(0);
     } else {
-      enable();
+      // Unmute = take over: stop Isaac if he's mid-thought/speech, then listen.
+      const st = useClunoid.getState();
+      if (st.isaac !== "idle") st.interrupt();
+      bufferRef.current = "";
       setMicOn(true);
+      enable();
     }
   }
 
@@ -149,7 +157,7 @@ export function Stage() {
             Meet Isaac
           </button>
           <p className="mt-4 text-xs text-ink-faint">
-            Isaac will ask to use your microphone — then just speak, no buttons.
+            Tap the mic to talk — Clunoid listens until you're done, then prepares.
           </p>
         </div>
       </main>
