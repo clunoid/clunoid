@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { SpeechPlayer } from "@/lib/voice/speech";
+import { getSupabaseBrowser } from "@/lib/supabase/client";
 import type { Scene, Experience, ExplainerExperience } from "@/lib/brain/scene";
 import type { BrainRequest, Turn } from "@/lib/brain/types";
 import {
@@ -13,7 +14,13 @@ import {
 } from "@/lib/data/countries";
 
 export type IsaacState = "idle" | "thinking" | "speaking";
-type UserState = { id?: string; name?: string; isAuthed: boolean };
+type UserState = {
+  id?: string;
+  name?: string;
+  email?: string;
+  createdAt?: string;
+  isAuthed: boolean;
+};
 export type GuessFeedback = { said: string; correct: boolean; answer: string };
 
 // Varied, instant flag reactions (no model round-trip → no lag).
@@ -71,12 +78,16 @@ type ClunoidStore = {
   started: boolean;
   authOpen: boolean;
   authMode: "signup" | "login";
+  profileOpen: boolean;
   guessFeedback: GuessFeedback | null; // flag reveal: what you said + right/wrong + answer
 
   setUser: (u: UserState) => void;
   setMicLevel: (v: number) => void;
   openAuth: (mode: "signup" | "login") => void;
   closeAuth: () => void;
+  openProfile: () => void;
+  closeProfile: () => void;
+  signOut: () => Promise<void>;
 
   greet: () => Promise<void>;
   send: (text: string) => Promise<void>;
@@ -158,7 +169,15 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
       isaac: "speaking",
       authOpen: scene.auth ? true : s.authOpen,
       authMode: scene.auth ?? s.authMode,
+      // Identity questions ("what's my name?") pop the profile open.
+      profileOpen: scene.showProfile ? true : s.profileOpen,
     }));
+
+    // Auto-close the profile a few seconds after Isaac opens it, so it never
+    // lingers over the cards/media.
+    if (scene.showProfile) {
+      setTimeout(() => set({ profileOpen: false }), 6500);
+    }
 
     if (newExplainer) {
       await playExplainerFrom(newExplainer, 0, seq);
@@ -209,12 +228,23 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
     started: false,
     authOpen: false,
     authMode: "signup",
+    profileOpen: false,
     guessFeedback: null,
 
     setUser: (u) => set({ user: u }),
     setMicLevel: (v) => set({ micLevel: v }),
     openAuth: (mode) => set({ authOpen: true, authMode: mode }),
     closeAuth: () => set({ authOpen: false }),
+    openProfile: () => set({ profileOpen: true }),
+    closeProfile: () => set({ profileOpen: false }),
+    signOut: async () => {
+      try {
+        await getSupabaseBrowser().auth.signOut();
+      } catch {
+        /* ignore */
+      }
+      set({ user: { isAuthed: false }, profileOpen: false });
+    },
 
     greet: async () => {
       if (get().started) return;

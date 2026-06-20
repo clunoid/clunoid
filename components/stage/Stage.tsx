@@ -11,12 +11,12 @@ import { IsaacOrb } from "./IsaacOrb";
 import { SceneRenderer } from "./SceneRenderer";
 import { Caption } from "./Caption";
 import { AuthPrompt } from "@/components/auth/AuthPrompt";
+import { ProfileMenu } from "@/components/auth/ProfileMenu";
 import { cn } from "@/lib/utils";
 
 export function Stage() {
   const isaac = useClunoid((s) => s.isaac);
   const started = useClunoid((s) => s.started);
-  const user = useClunoid((s) => s.user);
   const { greet, send, submitGuess, setUser, setMicLevel } = useClunoid.getState();
 
   const [interim, setInterim] = useState("");
@@ -25,17 +25,34 @@ export function Stage() {
   const bufferRef = useRef(""); // accumulates the user's full utterance
   const silenceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  // Restore the session on load and keep it in sync (handles OAuth return,
+  // sign-out, refresh — Supabase persists the session in the browser).
   useEffect(() => {
-    getSupabaseBrowser()
-      .auth.getUser()
-      .then(({ data }) => {
-        if (data.user)
-          setUser({
-            id: data.user.id,
-            name: (data.user.user_metadata?.name as string) || undefined,
-            isAuthed: true,
-          });
-      });
+    const supabase = getSupabaseBrowser();
+
+    async function hydrate(authUser: { id: string; email?: string; created_at?: string; user_metadata?: Record<string, unknown> } | null) {
+      if (!authUser) {
+        setUser({ isAuthed: false });
+        return;
+      }
+      let name =
+        (authUser.user_metadata?.name as string) || (authUser.user_metadata?.full_name as string) || undefined;
+      try {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("display_name")
+          .eq("id", authUser.id)
+          .maybeSingle();
+        if (profile?.display_name) name = profile.display_name as string;
+      } catch {
+        /* ignore */
+      }
+      setUser({ id: authUser.id, name, email: authUser.email, createdAt: authUser.created_at, isAuthed: true });
+    }
+
+    supabase.auth.getUser().then(({ data }) => hydrate(data.user));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => hydrate(session?.user ?? null));
+    return () => sub.subscription.unsubscribe();
   }, [setUser]);
 
   function handleInput(text: string) {
@@ -176,9 +193,7 @@ export function Stage() {
       <div className="relative z-10 flex h-full flex-col">
         <div className="flex shrink-0 items-center justify-between px-5 py-4">
           <span className="font-serif text-lg text-ink/80">clunoid</span>
-          {user.isAuthed && user.name && (
-            <span className="text-sm text-ink-faint">Hi, {user.name}</span>
-          )}
+          <ProfileMenu />
         </div>
 
         {/* Content (cards / steps / flags) — full width & height, scrolls if tall, over the orb */}

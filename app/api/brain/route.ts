@@ -34,7 +34,9 @@ export async function POST(req: NextRequest) {
     } = await supabase.auth.getUser();
     if (user) {
       ctx.user = {
-        name: (user.user_metadata?.name as string) || body.user?.name,
+        name: (user.user_metadata?.name as string) || (user.user_metadata?.full_name as string) || body.user?.name,
+        email: user.email,
+        createdAt: user.created_at,
         isAuthed: true,
       };
       const { data: profile } = await supabase

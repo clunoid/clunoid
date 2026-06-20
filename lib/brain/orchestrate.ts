@@ -175,6 +175,10 @@ const CURRENTISH_Q =
 const DATE_Q =
   /\btoday'?s date\b|\bwhat day is it\b|\bwhat time is it\b|\bwhen is today\b|^what'?s?(\s+is)?\s+(the\s+)?(date|time|day)\b/i;
 
+// Identity questions → answer from the account and pop the profile open.
+const IDENTITY_Q =
+  /\b(what('?s| is)? my name|who am i|my account|my profile|my details|when did i (join|sign ?up|register|create)|do you (know|remember) (me|my name)|what do you know about me)\b/i;
+
 function looksFactual(text: string): boolean {
   if (MATHISH.test(text) || PERSONAL.test(text)) return false;
   return FACTUAL_LEAD.test(text.trim());
@@ -561,16 +565,16 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
   if (!hasGroq()) return needsKeysScene();
 
   if (req.kind === "greeting") {
+    const authed = ctx.user?.isAuthed;
+    const content = authed
+      ? `Greet ${ctx.user?.name || "them"} back warmly by name in ONE short, fresh sentence, and invite them to explore anything.`
+      : "This is the very first thing you say. Introduce yourself as Isaac in one or two warm, fresh sentences, and warmly invite the person to create a free account so you can remember them and make it personal. Be specific and inviting, not generic.";
     const say = await isaacLine(
       ISAAC_PERSONA + dateLine(ctx) + contextPreamble(ctx),
-      [
-        {
-          role: "user",
-          content:
-            "This is the very first thing you say. Greet me as Isaac in ONE short, warm sentence (under 20 words) and invite me to talk or play. Be fresh, not generic.",
-        },
-      ],
-      "Hey, I'm Isaac — ask me anything, or say 'let's play flags'."
+      [{ role: "user", content }],
+      authed
+        ? `Welcome back${ctx.user?.name ? `, ${ctx.user.name}` : ""}! What shall we dive into?`
+        : "Hi, I'm Isaac — your guide to just about anything. Want to make a quick free account so I can remember you?"
     );
     return { say, expectsInput: "voice" };
   }
@@ -616,6 +620,35 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
       /* keep ISO */
     }
     return { say: `It's ${when}.`, expectsInput: "voice" };
+  }
+
+  // Identity questions → from the account (pops the profile open), or invite signup.
+  if (IDENTITY_Q.test(q)) {
+    if (ctx.user?.isAuthed) {
+      let created = "";
+      if (ctx.user.createdAt) {
+        try {
+          created = new Date(ctx.user.createdAt).toLocaleDateString(ctx.locale || "en-US", {
+            timeZone: ctx.timezone,
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+      const name = ctx.user.name;
+      const say = name
+        ? `You're ${name}${created ? `, and you joined Clunoid on ${created}` : ""}. There you are — that's you.`
+        : `You're signed in${created ? `, and you joined on ${created}` : ""}.`;
+      return { say, showProfile: true, keep: true, resume: true, expectsInput: "voice" };
+    }
+    return {
+      say: "We haven't properly met yet! Let's create your account so I can remember you and make this personal.",
+      auth: "signup",
+      expectsInput: "none",
+    };
   }
 
   // If content is already on the Stage, plan with context so Isaac never gets

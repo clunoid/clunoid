@@ -101,6 +101,8 @@ export const sceneSchema = z.object({
   expectsInput: z.enum(["voice", "text", "choice", "none"]).default("voice"),
   /** Whether Isaac wants to trigger the auth modal. */
   auth: z.enum(["signup", "login"]).optional(),
+  /** Pop the profile menu open (for "what's my name?" / identity questions). */
+  showProfile: z.boolean().optional(),
 });
 
 export type Scene = z.infer<typeof sceneSchema>;

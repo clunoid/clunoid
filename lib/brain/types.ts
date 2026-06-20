@@ -5,7 +5,7 @@ export type Turn = { role: "user" | "isaac"; content: string };
 
 /** Grounding context assembled server-side before calling a model. */
 export type BrainContext = {
-  user?: { name?: string; isAuthed: boolean };
+  user?: { name?: string; isAuthed: boolean; email?: string; createdAt?: string };
   /** Long-term facts recalled about the user. */
   memory?: string;
   /** Rolling summary of the current conversation. */
@@ -36,7 +36,7 @@ export type BrainRequest = {
   /** The experience currently on the Stage, if any (e.g. the active flag). */
   experience?: (Partial<Experience> & { type: string }) | null;
   /** Lightweight user state from the client. */
-  user?: { name?: string; isAuthed: boolean };
+  user?: { name?: string; isAuthed: boolean; email?: string; createdAt?: string };
   /** Accurate time/locale from the browser. */
   client?: ClientContext;
 };
