@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { X } from "lucide-react";
+import { X, Eye, EyeOff } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
 import { getSupabaseBrowser } from "@/lib/supabase/client";
 import { useClunoid } from "@/lib/store/useClunoid";
 
@@ -22,6 +23,7 @@ export function AuthPrompt() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -62,6 +64,21 @@ export function AuthPrompt() {
     }
   }
 
+  function finishAuth(authUser: User, display?: string) {
+    remember(email);
+    useClunoid.getState().interrupt(); // stop any in-progress speech (no overlap)
+    setUser({
+      id: authUser.id,
+      name: display,
+      email: authUser.email,
+      avatarUrl:
+        (authUser.user_metadata?.avatar_url as string) || (authUser.user_metadata?.picture as string) || undefined,
+      createdAt: authUser.created_at,
+      isAuthed: true,
+    });
+    close();
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -70,42 +87,30 @@ export function AuthPrompt() {
 
     try {
       if (mode === "signup") {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { data: { name } },
-        });
+        const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { name } } });
         if (error) throw error;
-        if (data.session && data.user) {
+        if (data.user) {
           await supabase.from("profiles").upsert({ id: data.user.id, display_name: name });
-          remember(email);
-          setUser({
-            id: data.user.id,
-            name,
-            email: data.user.email,
-            createdAt: data.user.created_at,
-            isAuthed: true,
-          });
-          close();
-        } else {
-          setMsg("Check your email to confirm your account, then sign in.");
+          finishAuth(data.user, name);
         }
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-        remember(email);
-        const display =
+        if (error) {
+          // New user who typed into sign-in → flip to sign-up (keep their details).
+          if (/invalid login credentials/i.test(error.message)) {
+            useClunoid.getState().openAuth("signup");
+            setMsg("Looks like you're new here — add your name, then create your account.");
+            setBusy(false);
+            return;
+          }
+          throw error;
+        }
+        finishAuth(
+          data.user,
           (data.user.user_metadata?.name as string) ||
-          (data.user.user_metadata?.full_name as string) ||
-          undefined;
-        setUser({
-          id: data.user.id,
-          name: display,
-          email: data.user.email,
-          createdAt: data.user.created_at,
-          isAuthed: true,
-        });
-        close();
+            (data.user.user_metadata?.full_name as string) ||
+            undefined
+        );
       }
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Something went wrong.");
@@ -172,17 +177,27 @@ export function AuthPrompt() {
                 autoComplete="email"
                 className="rounded-xl border border-border bg-base px-4 py-3 text-ink outline-none placeholder:text-ink-faint focus:border-clay"
               />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
-                required
-                minLength={6}
-                autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                autoFocus={!!email}
-                className="rounded-xl border border-border bg-base px-4 py-3 text-ink outline-none placeholder:text-ink-faint focus:border-clay"
-              />
+              <div className="relative">
+                <input
+                  type={showPass ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  required
+                  minLength={6}
+                  autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                  autoFocus={!!email}
+                  className="w-full rounded-xl border border-border bg-base px-4 py-3 pr-11 text-ink outline-none placeholder:text-ink-faint focus:border-clay"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPass((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink"
+                  aria-label={showPass ? "Hide password" : "Show password"}
+                >
+                  {showPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
 
               {msg && <p className="text-sm text-clay-soft">{msg}</p>}
 
@@ -191,7 +206,13 @@ export function AuthPrompt() {
                 disabled={busy}
                 className="mt-1 rounded-xl bg-clay px-4 py-3 font-medium text-[#1F1E1C] transition hover:bg-clay-soft disabled:opacity-60"
               >
-                {busy ? "One moment…" : mode === "signup" ? "Create account" : "Sign in"}
+                {busy
+                  ? mode === "signup"
+                    ? "Creating account…"
+                    : "Signing in…"
+                  : mode === "signup"
+                  ? "Create account"
+                  : "Sign in"}
               </button>
             </form>
 

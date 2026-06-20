@@ -17,11 +17,13 @@ import { cn } from "@/lib/utils";
 export function Stage() {
   const isaac = useClunoid((s) => s.isaac);
   const started = useClunoid((s) => s.started);
+  const isAuthed = useClunoid((s) => s.user.isAuthed);
   const { greet, send, submitGuess, setUser, setMicLevel } = useClunoid.getState();
 
   const [interim, setInterim] = useState("");
   const [typed, setTyped] = useState("");
   const [micOn, setMicOn] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
   const bufferRef = useRef(""); // accumulates the user's full utterance
   const silenceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -47,13 +49,37 @@ export function Stage() {
       } catch {
         /* ignore */
       }
-      setUser({ id: authUser.id, name, email: authUser.email, createdAt: authUser.created_at, isAuthed: true });
+      const avatarUrl =
+        (authUser.user_metadata?.avatar_url as string) || (authUser.user_metadata?.picture as string) || undefined;
+      setUser({
+        id: authUser.id,
+        name,
+        email: authUser.email,
+        avatarUrl,
+        createdAt: authUser.created_at,
+        isAuthed: true,
+      });
     }
 
-    supabase.auth.getUser().then(({ data }) => hydrate(data.user));
+    // Use getSession() — it reads the locally-stored session (fast, no network),
+    // so the UI is never blocked on a slow/unreachable auth server.
+    supabase.auth
+      .getSession()
+      .then(({ data }) => hydrate(data.session?.user ?? null))
+      .finally(() => setAuthChecked(true));
+    // Safety net: never leave the app stuck on the loading screen.
+    const t = setTimeout(() => setAuthChecked(true), 2000);
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => hydrate(session?.user ?? null));
-    return () => sub.subscription.unsubscribe();
+    return () => {
+      clearTimeout(t);
+      sub.subscription.unsubscribe();
+    };
   }, [setUser]);
+
+  // Signed-in users skip the "Meet Isaac" gate — drop them straight into the app.
+  useEffect(() => {
+    if (authChecked && isAuthed && !started) greet();
+  }, [authChecked, isAuthed, started, greet]);
 
   function handleInput(text: string) {
     setInterim("");
@@ -156,8 +182,17 @@ export function Stage() {
     handleInput(t);
   }
 
-  // ── Welcome gate (the tap unlocks audio + mic) ────────────────────────
-  if (!started) {
+  // Brief loading while we check the saved session (avoids a flash of the gate).
+  if (!authChecked) {
+    return (
+      <main className="stage-bg grid min-h-[100dvh] place-items-center">
+        <IsaacOrb size={120} />
+      </main>
+    );
+  }
+
+  // ── Welcome gate — only for brand-new / signed-out visitors ───────────────
+  if (!started && !isAuthed) {
     return (
       <main className="stage-bg grid min-h-[100dvh] place-items-center px-6">
         <div className="flex max-w-md flex-col items-center text-center">

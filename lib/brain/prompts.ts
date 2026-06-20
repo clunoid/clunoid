@@ -19,7 +19,7 @@ What you can put on the Stage (it appears as you talk):
 - A flag game, a step-by-step worked solution (use only as many steps as the problem needs — sometimes one), or a simple info card.
 - You decide what fits. You can switch or clear what's on screen the moment the user wants something else.
 
-Always be accurate. If unsure, say so plainly.`;
+Always be accurate. If unsure, say so plainly. Creating a Clunoid account is INSTANT — never tell anyone to confirm or check their email.`;
 
 /** Authoritative current date/time + location. Trust over anything the user claims. */
 export function dateLine(ctx: BrainContext): string {

@@ -565,18 +565,32 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
   if (!hasGroq()) return needsKeysScene();
 
   if (req.kind === "greeting") {
-    const authed = ctx.user?.isAuthed;
-    const content = authed
-      ? `Greet ${ctx.user?.name || "them"} back warmly by name in ONE short, fresh sentence, and invite them to explore anything.`
-      : "This is the very first thing you say. Introduce yourself as Isaac in one or two warm, fresh sentences, and warmly invite the person to create a free account so you can remember them and make it personal. Be specific and inviting, not generic.";
+    if (ctx.user?.isAuthed) {
+      const say = await isaacLine(
+        ISAAC_PERSONA + dateLine(ctx) + contextPreamble(ctx),
+        [
+          {
+            role: "user",
+            content: `Greet ${ctx.user?.name || "them"} back warmly by name in ONE short, fresh sentence, and invite them to explore anything.`,
+          },
+        ],
+        `Welcome back${ctx.user?.name ? `, ${ctx.user.name}` : ""}! What shall we dive into?`
+      );
+      return { say, expectsInput: "voice" };
+    }
+    // New / signed-out → a brief, sweet intro that opens the sign-up popup.
     const say = await isaacLine(
-      ISAAC_PERSONA + dateLine(ctx) + contextPreamble(ctx),
-      [{ role: "user", content }],
-      authed
-        ? `Welcome back${ctx.user?.name ? `, ${ctx.user.name}` : ""}! What shall we dive into?`
-        : "Hi, I'm Isaac — your guide to just about anything. Want to make a quick free account so I can remember you?"
+      ISAAC_PERSONA + dateLine(ctx),
+      [
+        {
+          role: "user",
+          content:
+            "Introduce yourself as Isaac in ONE warm, fresh sentence, and in a few sweet words say WHY they should make a free account (so you can remember them and personalise everything). Signing up is INSTANT — never mention confirming email. Do NOT ask whether they want an account; warmly invite them as the sign-up appears.",
+        },
+      ],
+      "Hi, I'm Isaac — make a quick free account so I can remember you and make all of this yours."
     );
-    return { say, expectsInput: "voice" };
+    return { say, auth: "signup", expectsInput: "none" };
   }
 
   // Flag guess/next are handled locally on the client now; keep safe fallbacks.

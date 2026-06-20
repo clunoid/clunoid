@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { LogOut } from "lucide-react";
 import { useClunoid } from "@/lib/store/useClunoid";
+import { cn } from "@/lib/utils";
 
 /**
  * Top-right profile. Signed-out users see a "Sign in" pill; signed-in users see
@@ -48,10 +49,10 @@ export function ProfileMenu() {
     <div ref={ref} className="relative">
       <button
         onClick={() => (open ? closeProfile() : openProfile())}
-        className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-clay-soft to-clay text-sm font-semibold text-[#1F1E1C] shadow-glow transition hover:brightness-105"
+        className="h-9 w-9 overflow-hidden rounded-full shadow-glow transition hover:brightness-105"
         aria-label="Your profile"
       >
-        {initial}
+        <Avatar url={user.avatarUrl} initial={initial} />
       </button>
 
       <AnimatePresence>
@@ -65,8 +66,8 @@ export function ProfileMenu() {
           >
             <div className="bg-gradient-to-br from-clay/25 to-spark/15 p-4">
               <div className="flex items-center gap-3">
-                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-gradient-to-br from-clay-soft to-clay text-base font-semibold text-[#1F1E1C]">
-                  {initial}
+                <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full">
+                  <Avatar url={user.avatarUrl} initial={initial} big />
                 </div>
                 <div className="min-w-0">
                   <div className="truncate font-medium text-ink">{user.name || "You"}</div>
@@ -93,5 +94,32 @@ export function ProfileMenu() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/** Google profile photo when available, otherwise a colored initial. */
+function Avatar({ url, initial, big }: { url?: string; initial: string; big?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (url && !failed) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return (
+      <img
+        src={url}
+        alt=""
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className="h-full w-full object-cover"
+      />
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "grid h-full w-full place-items-center bg-gradient-to-br from-clay-soft to-clay font-semibold text-[#1F1E1C]",
+        big ? "text-base" : "text-sm"
+      )}
+    >
+      {initial}
+    </span>
   );
 }
