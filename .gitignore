@@ -1,4 +1,25 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+
+# secrets & env
 .env
 .env.*
+
+# supabase local
 supabase/.temp/
 supabase/.branches/
+
+# misc
+*.log
+.DS_Store
+*.pem
+.vercel
+*.tsbuildinfo
