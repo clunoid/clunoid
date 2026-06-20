@@ -93,6 +93,8 @@ export const sceneSchema = z.object({
   experience: experienceSchema.optional(),
   /** If true, clear the current experience (Isaac is just talking now). */
   clear: z.boolean().optional(),
+  /** If true, keep the current experience on screen (a short interactive reply). */
+  keep: z.boolean().optional(),
   /** What kind of input Isaac is now waiting for. */
   expectsInput: z.enum(["voice", "text", "choice", "none"]).default("voice"),
   /** Whether Isaac wants to trigger the auth modal. */

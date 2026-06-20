@@ -139,10 +139,11 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
     set((s) => ({
       caption: isExplainer && exp.beats[0] ? exp.beats[0].say : scene.say,
       spokenChars: 0,
-      explainerIndex: 0,
+      explainerIndex: scene.keep ? s.explainerIndex : 0,
       guessFeedback: null,
-      // Always replace the Stage with the new scene's experience (or clear it).
-      experience: exp,
+      // Replace the Stage with the new experience, UNLESS it's a short interactive
+      // reply (keep) — then leave the current content on screen.
+      experience: scene.keep ? s.experience : exp,
       expectsInput: scene.expectsInput,
       history: [...s.history, { role: "isaac" as const, content: scene.say }].slice(-14),
       isaac: "speaking",

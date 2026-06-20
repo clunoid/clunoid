@@ -385,6 +385,7 @@ async function buildExplainer(query: string, question: string, ctx: BrainContext
 
 For EACH beat, give one to three natural spoken sentences AND a "media" visual that depicts EXACTLY what you are saying in that beat — the specific objects, action, or people, not a vague theme. Include media on EVERY beat. Examples: you say "he loaded a stone into his sling" → query "leather sling and a smooth stone", type "photo". You say Trump and Putin met in Alaska → query "Donald Trump and Vladimir Putin meeting Alaska summit", type "photo". You introduce one named thing → type "entity" with its proper name. Only use type "clip" for purely generic atmosphere where no specific real footage is needed. Add a short label.
 Plan the visuals to fit the timeline: for a history of a person/place/country, move the media from the OLDEST relevant imagery to the LATEST as the story progresses. Make each beat's media DIFFERENT (no repetition) unless the same visual genuinely fits best.
+End the FINAL beat by warmly inviting the user to ask about anything specific they'd like to go deeper on.
 
 State only established facts — never predictions, rumours, or opinions as fact. Never say you can't show or discuss something that's public and legal.\nVerified facts:\n${facts}`,
       prompt: question,
@@ -490,6 +491,64 @@ function needsKeysScene(): Scene {
   };
 }
 
+// ── Context-aware planner (used when something is already on the Stage) ──
+// Decides switch vs follow-up vs reaction vs confirmation so Isaac never gets
+// confused or blends topics. Isaac only *speaks content* after a full rebuild.
+
+type Plan = {
+  intent: "explain" | "ask_switch" | "continue" | "react" | "chat" | "math" | "flags" | "signup" | "login";
+  topic?: string;
+  say?: string;
+};
+
+function currentTopicLabel(req: BrainRequest): string {
+  const e = req.experience;
+  if (e?.type === "explainer" || e?.type === "rich_card") return String(e.title ?? "the current topic");
+  if (e?.type === "math_steps") return "a math solution";
+  if (e?.type === "flag_quiz") return "a flag game";
+  return "the current topic";
+}
+
+function parsePlan(text: string): Plan | null {
+  try {
+    const a = text.indexOf("{");
+    const b = text.lastIndexOf("}");
+    if (a === -1 || b === -1) return null;
+    const obj = JSON.parse(text.slice(a, b + 1));
+    return typeof obj.intent === "string" ? (obj as Plan) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function planWithContext(req: BrainRequest, ctx: BrainContext): Promise<Plan | null> {
+  const topic = currentTopicLabel(req);
+  const system = `${ISAAC_PERSONA}${dateLine(
+    ctx
+  )}\nThere is content on the Stage right now about: "${topic}". Decide how to handle the user's latest message so you are NEVER confused and never blend topics. Respond with ONLY a single-line JSON object:
+{"intent":"explain|ask_switch|continue|react|chat|math|flags|signup|login","topic":"...","say":"..."}
+Rules:
+- A clear request for a DIFFERENT complete topic, OR a follow-up clearly RELATED to "${topic}" → "explain" with "topic" set (we rebuild fresh — no blending).
+- Just a short bare new subject unrelated to "${topic}" (e.g. only "North Korea") → "ask_switch"; write "say" as a brief question confirming they want to move to it (e.g. "Want me to switch over to North Korea?"). Leave "topic" empty.
+- If you just asked whether to switch and they AGREE (yes/sure/go ahead) → "explain" with "topic" = the subject you offered. If they DECLINE (no/not now) → "continue" with a brief "okay, staying here" in "say".
+- A reaction or comment (e.g. "I love this", "thanks", or they dislike it) → "react"; "say" = a brief warm acknowledgement, and if they're unhappy, ask what they'd like instead.
+- A math problem → "math" ("topic"=the problem). A flag game request → "flags". Account actions → "signup"/"login".
+- Otherwise smalltalk → "chat" with a short "say".`;
+  try {
+    const { text } = await generateText({
+      model: MODELS.fast(),
+      system,
+      messages: toMessages(req.history, req.text),
+      temperature: 0.3,
+      maxTokens: 300,
+      maxRetries: 1,
+    });
+    return parsePlan(text);
+  } catch {
+    return null;
+  }
+}
+
 // ── Entry point ────────────────────────────────────────────────────────
 
 export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise<Scene> {
@@ -552,6 +611,39 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
     }
     return { say: `It's ${when}.`, expectsInput: "voice" };
   }
+
+  // If content is already on the Stage, plan with context so Isaac never gets
+  // confused (switch vs follow-up vs reaction vs confirming a switch). Content
+  // is only ever spoken after a full rebuild; short replies keep the screen.
+  const onScreen = req.experience?.type;
+  if (onScreen === "explainer" || onScreen === "rich_card" || onScreen === "math_steps") {
+    const plan = await planWithContext(req, ctx);
+    if (plan) {
+      switch (plan.intent) {
+        case "explain":
+          return buildExplainer(plan.topic || q, plan.topic || q, ctx);
+        case "math":
+          return solveMath(plan.topic || q, ctx);
+        case "flags": {
+          const c = pickCountry();
+          return buildFlagScene(c, 1, 0, "Let's play! Which country does this flag belong to?");
+        }
+        case "signup":
+          return { say: plan.say || "Let's set up your account.", auth: "signup", expectsInput: "none" };
+        case "login":
+          return { say: plan.say || "Welcome back.", auth: "login", expectsInput: "none" };
+        // ask_switch / continue / react / chat → short reply, KEEP current content.
+        default:
+          return {
+            say: plan.say || "Got it — what would you like to explore?",
+            keep: true,
+            expectsInput: "voice",
+          };
+      }
+    }
+    // planner failed → fall through to the default routing below.
+  }
+
   // "Who currently leads X?" → quick authoritative card (Wikidata). Fast, single fact.
   if (OFFICEHOLDER.test(q) && CURRENTISH.test(q)) return factScene(extractTopic(q), q, ctx);
 
