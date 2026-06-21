@@ -101,7 +101,10 @@ export const calculationSchema = z.object({
   /** A brief spoken intro (what this is + what we're finding) said before step 1. */
   intro: z.string().optional(),
   steps: z.array(calcStepSchema).min(1),
+  /** A single brief final answer (when the problem asks for ONE quantity). */
   finalAnswer: z.string().optional(),
+  /** Multiple final answers as points (when the problem has sub-questions). */
+  answers: z.array(z.object({ label: z.string(), value: z.string() })).optional(),
   /** Left-side facts / context / tips card. */
   context: z
     .object({

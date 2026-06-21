@@ -44,19 +44,25 @@ export function CalculationView({ data }: { data: CalculationExperience }) {
     }
   }, [data.media]);
 
+  const hasMedia = data.media.length > 0;
+  const answers = data.answers ?? [];
+  const hasAnswers = answers.length > 0;
+
   return (
     <div className="flex w-full flex-col gap-5">
       {data.title && <h2 className="text-center font-serif text-xl text-ink sm:text-2xl">{data.title}</h2>}
 
-      <div className="flex w-full flex-col gap-6 lg:flex-row lg:items-start lg:gap-10">
-        {/* LEFT — related media + facts / context / tips */}
-        <div className="flex w-full shrink-0 flex-col gap-4 lg:sticky lg:top-2 lg:w-[42%]">
-          {data.media.length > 0 && <MediaStack media={data.media} />}
-          {data.context && <ContextCard context={data.context} />}
-        </div>
+      {/* Desktop: a 50/50 grid — media top-left, facts bottom-left, steps right.
+          Mobile: media, then the step-by-step, then the facts/tips (reordered). */}
+      <div className="flex w-full flex-col gap-6 lg:grid lg:grid-cols-2 lg:items-start lg:gap-10">
+        {hasMedia && (
+          <div className="order-1 lg:order-none lg:col-start-1 lg:row-start-1">
+            <MediaStack media={data.media} />
+          </div>
+        )}
 
-        {/* RIGHT — step cards (reveal one at a time; past ones collapse) */}
-        <div className="flex w-full flex-1 flex-col gap-3">
+        {/* STEP CARDS — reveal one at a time; past ones collapse */}
+        <div className="order-2 flex flex-col gap-3 lg:order-none lg:col-start-2 lg:row-span-2 lg:row-start-1">
           {steps.map((step, i) => {
             if (i > reached) return null; // not reached yet
             const isCurrent = i === reached;
@@ -118,21 +124,42 @@ export function CalculationView({ data }: { data: CalculationExperience }) {
             );
           })}
 
-          {/* Final answer */}
+          {/* Final answer(s) — points format when there are sub-questions */}
           <AnimatePresence>
-            {done && data.finalAnswer && (
+            {done && (hasAnswers || data.finalAnswer) && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.96, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 transition={{ type: "spring", stiffness: 240, damping: 22 }}
-                className="rounded-2xl border border-spark/50 bg-gradient-to-br from-spark/15 to-clay/10 p-5 text-center"
+                className="rounded-2xl border border-spark/50 bg-gradient-to-br from-spark/15 to-clay/10 p-5"
               >
-                <div className="text-[11px] uppercase tracking-wide text-ink-muted">Answer</div>
-                <div className="mt-1 font-serif text-xl text-ink">{data.finalAnswer}</div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-muted">
+                  {answers.length > 1 ? "Answers" : "Answer"}
+                </div>
+                {hasAnswers ? (
+                  <ul className="mt-2 flex flex-col gap-2">
+                    {answers.map((a, i) => (
+                      <li key={i} className="flex items-center gap-2 text-[15px]">
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-spark" />
+                        <span className="text-ink-muted">{a.label}:</span>
+                        <span className="font-serif text-ink">{a.value}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="mt-1 text-center font-serif text-xl text-ink">{data.finalAnswer}</div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
         </div>
+
+        {/* FACTS / CONTEXT / TIPS — below the steps on mobile, bottom-left on desktop */}
+        {data.context && (
+          <div className={cn("order-3 lg:order-none lg:col-start-1", hasMedia ? "lg:row-start-2" : "lg:row-start-1")}>
+            <ContextCard context={data.context} />
+          </div>
+        )}
       </div>
     </div>
   );

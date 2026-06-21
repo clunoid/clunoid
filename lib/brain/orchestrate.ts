@@ -436,8 +436,15 @@ const calcGenSchema = z.object({
     .describe("EVERY step needed to reach the answer, in order, skipping NOTHING. Make the LAST step VERIFY the answer."),
   finalAnswer: z
     .string()
+    .optional()
     .describe(
-      "ONLY the brief final result with units and nothing else — e.g. 'H = 25 m' or 'x = 35'. No working, no explanation, no conditions, no symbolic-vs-numeric caveats."
+      "Use ONLY when the problem asks for ONE quantity: the brief final result with units, in SIMPLEST form as a DECIMAL (never a fraction) — e.g. 'H = 25 m' or 'x = 0.75'. No working, no caveats."
+    ),
+  answers: z
+    .array(z.object({ label: z.string(), value: z.string() }))
+    .optional()
+    .describe(
+      "Use when the problem has MULTIPLE sub-questions (e.g. orbital period, speed, total energy). One point per quantity: label = what it is, value = the brief result with units in SIMPLEST form as a DECIMAL (never a fraction). Use this OR finalAnswer, not both."
     ),
   context: z.object({
     summary: z.string().describe("1-2 sentences: what type of calculation this is and the core idea/method."),
@@ -464,7 +471,8 @@ function calcSystem(ctx: BrainContext): string {
 - Use the EXACT values GIVEN in the problem. NEVER assume or substitute a default (e.g. if a radius of 10 m is given, use 10 — never 1). Read every number carefully.
 - Work the complete solution, then VERIFY it by substituting your answer back into EVERY condition in the problem and re-checking the arithmetic. Only finalise once it genuinely checks out.
 - Do not invent missing numbers; if something is truly ambiguous, state the assumption.
-Then teach it step by step, skipping NO step, so a learner follows every single move from start to answer. For EACH step: a short title, the spoken explanation ("say"), the written explanation ("text"), and the math as LaTeX where it applies. Make the LAST step a quick verification (plug the answer back). Also give a brief "intro" (what this is and what we're finding), the context (type, key formula, verified facts, tips), 1-4 media phrases, and a BRIEF finalAnswer (just the result + units).`;
+Then teach it step by step, skipping NO step, so a learner follows every single move from start to answer. For EACH step: a short title, the spoken explanation ("say"), the written explanation ("text"), and the math as LaTeX where it applies. Make the LAST step a quick verification (plug the answer back). Also give a brief "intro" (what this is and what we're finding), the context (type, key formula, verified facts, tips), and 1-4 media phrases.
+FINAL ANSWER: give it in SIMPLEST form as a DECIMAL — never a fraction (e.g. 0.75, not 3/4). If the problem asks for ONE quantity use "finalAnswer"; if it asks for SEVERAL (sub-questions like period, speed, energy) put each in "answers" as one short {label, value} point. Keep every value terse with units.`;
 }
 
 async function solveCalc(
@@ -529,12 +537,16 @@ async function buildCalculation(problem: string, ctx: BrainContext): Promise<Sce
   let object = solved;
   if (!object) return { say: "Let me try that again — could you restate the problem for me?", expectsInput: "voice" };
 
+  // Combine single/multi answers into one string for the cross-check.
+  const answerText = (o: z.infer<typeof calcGenSchema>) =>
+    o.finalAnswer || (o.answers ?? []).map((a) => `${a.label}: ${a.value}`).join("; ");
+
   // Reconcile on disagreement with a careful re-solve that sees both answers.
-  if (check && !answersAgree(object.finalAnswer, check)) {
+  if (check && !answersAgree(answerText(object), check)) {
     const corrected = await solveCalc(
       problem,
       ctx,
-      `A first attempt gave "${object.finalAnswer}" but a careful independent re-check gave "${check}" — these DISAGREE. Re-solve with extreme care using the EXACT given values and arithmetic, and make sure the final answer is correct and consistent with every step.`
+      `A first attempt gave "${answerText(object)}" but a careful independent re-check gave "${check}" — these DISAGREE. Re-solve with extreme care using the EXACT given values and arithmetic, and make sure the final answer is correct and consistent with every step.`
     );
     if (corrected) object = corrected;
   }
@@ -561,6 +573,7 @@ async function buildCalculation(problem: string, ctx: BrainContext): Promise<Sce
       intro: object.intro,
       steps: object.steps,
       finalAnswer: object.finalAnswer,
+      answers: object.answers,
       context: object.context,
       media,
     },

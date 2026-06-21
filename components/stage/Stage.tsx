@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Mic, MicOff, Send, Calculator } from "lucide-react";
+import { Mic, MicOff, Send, Calculator, Loader2 } from "lucide-react";
 import { useClunoid } from "@/lib/store/useClunoid";
 import { useSpeechInput } from "@/lib/voice/useSpeechInput";
 import { useMicLevel } from "@/lib/voice/useMicLevel";
@@ -29,6 +29,7 @@ export function Stage() {
   const [authChecked, setAuthChecked] = useState(false);
   const bufferRef = useRef(""); // accumulates the user's full utterance
   const silenceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const taRef = useRef<HTMLTextAreaElement | null>(null); // the auto-growing input
 
   // Restore the session on load and keep it in sync (handles OAuth return,
   // sign-out, refresh — Supabase persists the session in the browser).
@@ -200,13 +201,21 @@ export function Stage() {
     }
   }
 
-  function submitTyped(e: React.FormEvent) {
-    e.preventDefault();
+  function submitTyped(e?: React.FormEvent) {
+    e?.preventDefault();
     const t = typed.trim();
     if (!t) return;
     setTyped("");
     handleInput(t);
   }
+
+  // Grow the input to fit pasted/multi-line text (like a chat box), up to a cap.
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
+  }, [typed]);
 
   // Brief loading while we check the saved session (avoids a flash of the gate).
   if (!authChecked) {
@@ -261,15 +270,20 @@ export function Stage() {
       <div className="relative z-10 flex h-full flex-col">
         <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-4">
           <span className="font-serif text-lg text-ink/80">clunoid</span>
-          {experience?.type === "calculation" && (
-            <div className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-clay to-spark px-3 py-1 text-[#1F1E1C] shadow-glow">
-              <Calculator size={14} />
+          {isaac === "thinking" ? (
+            <div className="inline-flex shrink-0 items-center gap-2 rounded-full border border-border bg-surface/90 px-3 py-1 backdrop-blur">
+              <Loader2 size={14} className="animate-spin text-clay" />
+              <span className="text-xs font-medium text-ink-muted">Thinking…</span>
+            </div>
+          ) : experience?.type === "calculation" ? (
+            <div className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-gradient-to-r from-clay to-spark px-2.5 py-1 text-[#1F1E1C] shadow-glow sm:gap-2 sm:px-3">
+              <Calculator size={14} className="shrink-0" />
               <span className="hidden text-[11px] font-medium uppercase tracking-wide opacity-80 sm:inline">
                 Calculation
               </span>
-              <span className="text-xs font-semibold">{experience.kind}</span>
+              <span className="max-w-[42vw] truncate text-xs font-semibold sm:max-w-none">{experience.kind}</span>
             </div>
-          )}
+          ) : null}
           <ProfileMenu />
         </div>
 
@@ -281,7 +295,7 @@ export function Stage() {
         {/* Bottom bar: mic far-left · input stretches · send far-right */}
         <form
           onSubmit={submitTyped}
-          className="flex shrink-0 items-center gap-2 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-2 sm:gap-4 sm:px-6"
+          className="flex shrink-0 items-end gap-2 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-2 sm:gap-4 sm:px-6"
         >
           {(() => {
             const listening = micOn && isaac === "idle";
@@ -314,11 +328,20 @@ export function Stage() {
             );
           })()}
 
-          <input
+          <textarea
+            ref={taRef}
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
-            placeholder="Type to Isaac"
-            className="h-12 min-w-0 flex-1 rounded-full border border-border bg-surface/80 px-5 text-ink outline-none backdrop-blur placeholder:text-ink-faint focus:border-clay sm:h-14"
+            onKeyDown={(e) => {
+              // Enter sends; Shift+Enter makes a new line (paste keeps its lines).
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submitTyped();
+              }
+            }}
+            rows={1}
+            placeholder="Ask Isaac anything"
+            className="max-h-[40vh] min-h-[3rem] min-w-0 flex-1 resize-none rounded-3xl border border-border bg-surface/80 px-5 py-[0.8rem] text-ink outline-none backdrop-blur placeholder:text-ink-faint focus:border-clay sm:min-h-[3.5rem] sm:py-[0.95rem]"
           />
 
           <button
