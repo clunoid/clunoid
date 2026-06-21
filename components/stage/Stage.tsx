@@ -18,7 +18,8 @@ export function Stage() {
   const isaac = useClunoid((s) => s.isaac);
   const started = useClunoid((s) => s.started);
   const isAuthed = useClunoid((s) => s.user.isAuthed);
-  const { greet, send, submitGuess, setUser, setMicLevel } = useClunoid.getState();
+  const createdAt = useClunoid((s) => s.user.createdAt);
+  const { greet, send, submitGuess, setUser, setMicLevel, announceAuth } = useClunoid.getState();
 
   const [interim, setInterim] = useState("");
   const [typed, setTyped] = useState("");
@@ -31,10 +32,15 @@ export function Stage() {
   // sign-out, refresh — Supabase persists the session in the browser).
   useEffect(() => {
     const supabase = getSupabaseBrowser();
+    // Supabase fires onAuthStateChange several times (initial, signed-in, token
+    // refresh); remember whose profile we've already pulled so we don't re-hit
+    // the DB on every event.
+    let enrichedFor: string | null = null;
 
     function hydrate(authUser: { id: string; email?: string; created_at?: string; user_metadata?: Record<string, unknown> } | null) {
       if (!authUser) {
         setUser({ isAuthed: false });
+        enrichedFor = null;
         return;
       }
       const metaName =
@@ -53,7 +59,10 @@ export function Stage() {
       // welcome gate (this was the "session doesn't persist on refresh" bug).
       setUser({ ...base, name: metaName });
       // Best-effort: upgrade the display name from their profile in the
-      // background. If it hangs or fails, they stay signed in with the meta name.
+      // background — but only once per user per session. If it hangs or fails,
+      // they stay signed in with the meta name.
+      if (enrichedFor === authUser.id) return;
+      enrichedFor = authUser.id; // optimistic: blocks duplicate in-flight fetches
       void (async () => {
         try {
           const { data: profile } = await supabase
@@ -64,7 +73,7 @@ export function Stage() {
           const dn = profile?.display_name as string | undefined;
           if (dn && useClunoid.getState().user.isAuthed) setUser({ ...base, name: dn });
         } catch {
-          /* ignore — keep the session-derived name */
+          enrichedFor = null; // allow a retry on a later event
         }
       })();
     }
@@ -84,10 +93,17 @@ export function Stage() {
     };
   }, [setUser]);
 
-  // Signed-in users skip the "Meet Isaac" gate — drop them straight into the app.
+  // Signed-in users skip the "Meet Isaac" gate — drop them straight into the app,
+  // and the brain decides what Isaac says based on what actually happened. A
+  // Google sign-up returns via a full page reload (no in-memory flag survives),
+  // so we read the account age: a just-created account → a first-time welcome;
+  // otherwise they're returning → welcome them back.
   useEffect(() => {
-    if (authChecked && isAuthed && !started) greet();
-  }, [authChecked, isAuthed, started, greet]);
+    if (!authChecked || !isAuthed || started) return;
+    const justSignedUp = createdAt ? Date.now() - new Date(createdAt).getTime() < 90_000 : false;
+    if (justSignedUp) void announceAuth("signed_up");
+    else void greet();
+  }, [authChecked, isAuthed, started, createdAt, greet, announceAuth]);
 
   function handleInput(text: string) {
     setInterim("");
@@ -217,7 +233,7 @@ export function Stage() {
             Meet Isaac
           </button>
           <p className="mt-4 text-xs text-ink-faint">
-            Tap the mic to talk — Clunoid listens until you're done, then prepares.
+            Tap the mic to talk — Clunoid listens until you&apos;re done, then prepares.
           </p>
         </div>
       </main>

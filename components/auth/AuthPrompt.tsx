@@ -64,7 +64,7 @@ export function AuthPrompt() {
     }
   }
 
-  function finishAuth(authUser: User, display?: string) {
+  function finishAuth(authUser: User, display: string | undefined, event: "signed_up" | "signed_in") {
     remember(email);
     useClunoid.getState().interrupt(); // stop any in-progress speech (no overlap)
     setUser({
@@ -77,6 +77,8 @@ export function AuthPrompt() {
       isAuthed: true,
     });
     close();
+    // Hand off to the brain so Isaac reacts in real time (welcome / welcome-back).
+    void useClunoid.getState().announceAuth(event);
   }
 
   async function submit(e: React.FormEvent) {
@@ -105,7 +107,8 @@ export function AuthPrompt() {
               name ||
                 (signInData.user.user_metadata?.name as string) ||
                 (signInData.user.user_metadata?.full_name as string) ||
-                undefined
+                undefined,
+              "signed_in"
             );
             return;
           }
@@ -115,7 +118,7 @@ export function AuthPrompt() {
           // The DB trigger creates the profile; this is a non-blocking nicety so
           // it can never stall the sign-up from completing.
           void supabase.from("profiles").upsert({ id: data.user.id, display_name: name });
-          finishAuth(data.user, name);
+          finishAuth(data.user, name, "signed_up");
         }
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -133,7 +136,8 @@ export function AuthPrompt() {
           data.user,
           (data.user.user_metadata?.name as string) ||
             (data.user.user_metadata?.full_name as string) ||
-            undefined
+            undefined,
+          "signed_in"
         );
       }
     } catch (err) {

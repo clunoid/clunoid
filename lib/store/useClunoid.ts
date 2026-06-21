@@ -89,6 +89,8 @@ type ClunoidStore = {
   openProfile: () => void;
   closeProfile: () => void;
   signOut: () => Promise<void>;
+  /** Tell the brain an account state just changed, so Isaac responds in real time. */
+  announceAuth: (event: "signed_up" | "signed_in" | "signed_out") => Promise<void>;
 
   greet: () => Promise<void>;
   send: (text: string) => Promise<void>;
@@ -206,6 +208,7 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
         ...req,
         history: get().history,
         experience: get().experience ?? null,
+        authOpen: get().authOpen,
         user: get().user,
         client: clientCtx(),
       });
@@ -239,12 +242,31 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
     openProfile: () => set({ profileOpen: true }),
     closeProfile: () => set({ profileOpen: false }),
     signOut: async () => {
+      // Acknowledge instantly: close the menu and stop whatever Isaac is mid-saying
+      // (so a sign-out is felt right away, never ignored while he keeps talking).
+      set({ profileOpen: false });
+      stopPlayback();
+      set({ isaac: "idle", amplitude: 0 });
+      // Let the brain give a brief, natural goodbye — spoken WHILE we still know
+      // who they are (run before clearing the session so the name is available).
+      try {
+        await run({ kind: "auth_event", event: "signed_out" });
+      } catch {
+        /* ignore — still sign out below */
+      }
       try {
         await getSupabaseBrowser().auth.signOut();
       } catch {
         /* ignore */
       }
-      set({ user: { isAuthed: false }, profileOpen: false });
+      set({ user: { isAuthed: false } });
+    },
+
+    announceAuth: async (event) => {
+      // We're on the live Stage now (not the welcome gate), and the profile menu
+      // must never linger open across an account change.
+      set({ started: true, profileOpen: false });
+      await run({ kind: "auth_event", event });
     },
 
     greet: async () => {

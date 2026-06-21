@@ -564,6 +564,61 @@ IMPORTANT: ask_switch / continue / react / chat replies must be SHORT acknowledg
 export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise<Scene> {
   if (!hasGroq()) return needsKeysScene();
 
+  // An account state just changed (sign up / sign in / sign out). The brain
+  // decides — in real time — what Isaac says, so the spoken word always matches
+  // what actually happened. Always ONE short, fresh sentence (never narrate UI).
+  if (req.kind === "auth_event") {
+    const name = ctx.user?.name || req.user?.name;
+    const persona = ISAAC_PERSONA + dateLine(ctx);
+
+    if (req.event === "signed_out") {
+      const say = await isaacLine(
+        persona,
+        [
+          {
+            role: "user",
+            content: `${
+              name ? `${name} is` : "They are"
+            } signing out right now. Say a warm, brief ONE-sentence goodbye that reassures them you'll pick up right where you left off whenever they come back. Do NOT invent, name, or reference any specific topic or subject — keep it general. No questions, no narration.`,
+          },
+        ],
+        `Anytime${name ? `, ${name}` : ""} — come back whenever and we'll pick up right where we left off.`
+      );
+      return { say, clear: true, expectsInput: "none" };
+    }
+
+    if (req.event === "signed_up") {
+      const say = await isaacLine(
+        persona + contextPreamble(ctx),
+        [
+          {
+            role: "user",
+            content: `${
+              name || "They"
+            } just created their account. In ONE warm, fresh sentence, welcome them by name and let them know they can ask about anything — out loud or typed. Keep it short; don't describe the screen.`,
+          },
+        ],
+        `You're all set${name ? `, ${name}` : ""}! Ask me anything — say it or type it — and I'll show you.`
+      );
+      return { say, expectsInput: "voice" };
+    }
+
+    // signed_in → welcome back; keep any content on screen and resume it after.
+    const say = await isaacLine(
+      persona + contextPreamble(ctx),
+      [
+        {
+          role: "user",
+          content: `${
+            name || "They"
+          } just signed back in. Welcome them back by name in ONE short, fresh sentence and invite them to continue or explore something new. Keep it short; don't describe the screen.`,
+        },
+      ],
+      `Welcome back${name ? `, ${name}` : ""}! What shall we get into?`
+    );
+    return { say, keep: true, resume: true, expectsInput: "voice" };
+  }
+
   if (req.kind === "greeting") {
     if (ctx.user?.isAuthed) {
       const say = await isaacLine(
@@ -578,17 +633,19 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
       );
       return { say, expectsInput: "voice" };
     }
-    // New / signed-out → a brief, sweet intro that opens the sign-up popup.
+    // New / signed-out → a brief, sweet intro that opens the sign-up form. The
+    // form is opening on its own — invite them to fill it in, but NEVER narrate
+    // the screen (no "a form appears"). One short, warm sentence.
     const say = await isaacLine(
       ISAAC_PERSONA + dateLine(ctx),
       [
         {
           role: "user",
           content:
-            "Introduce yourself as Isaac in ONE warm, fresh sentence, and in a few sweet words say WHY they should make a free account (so you can remember them and personalise everything). Signing up is INSTANT — never mention confirming email. Do NOT ask whether they want an account; warmly invite them as the sign-up appears.",
+            "Say hello and introduce yourself as Isaac in ONE short, warm sentence, and invite them to pop their name and email in to get started so you can remember them and make this theirs. Sign-up is INSTANT — never mention confirming email. Don't ask whether they want an account, and don't describe the screen — just warmly invite them in.",
         },
       ],
-      "Hi, I'm Isaac — make a quick free account so I can remember you and make all of this yours."
+      "Hey, I'm Isaac — pop your name and email in and I'll remember you and make all of this yours."
     );
     return { say, auth: "signup", expectsInput: "none" };
   }
