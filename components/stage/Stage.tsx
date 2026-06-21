@@ -32,33 +32,41 @@ export function Stage() {
   useEffect(() => {
     const supabase = getSupabaseBrowser();
 
-    async function hydrate(authUser: { id: string; email?: string; created_at?: string; user_metadata?: Record<string, unknown> } | null) {
+    function hydrate(authUser: { id: string; email?: string; created_at?: string; user_metadata?: Record<string, unknown> } | null) {
       if (!authUser) {
         setUser({ isAuthed: false });
         return;
       }
-      let name =
+      const metaName =
         (authUser.user_metadata?.name as string) || (authUser.user_metadata?.full_name as string) || undefined;
-      try {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("display_name")
-          .eq("id", authUser.id)
-          .maybeSingle();
-        if (profile?.display_name) name = profile.display_name as string;
-      } catch {
-        /* ignore */
-      }
       const avatarUrl =
         (authUser.user_metadata?.avatar_url as string) || (authUser.user_metadata?.picture as string) || undefined;
-      setUser({
+      const base = {
         id: authUser.id,
-        name,
         email: authUser.email,
         avatarUrl,
         createdAt: authUser.created_at,
-        isAuthed: true,
-      });
+        isAuthed: true as const,
+      };
+      // Sign the user in IMMEDIATELY from the session. Never block auth on the
+      // profiles read — a slow/unreachable DB fetch must not strand them on the
+      // welcome gate (this was the "session doesn't persist on refresh" bug).
+      setUser({ ...base, name: metaName });
+      // Best-effort: upgrade the display name from their profile in the
+      // background. If it hangs or fails, they stay signed in with the meta name.
+      void (async () => {
+        try {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("display_name")
+            .eq("id", authUser.id)
+            .maybeSingle();
+          const dn = profile?.display_name as string | undefined;
+          if (dn && useClunoid.getState().user.isAuthed) setUser({ ...base, name: dn });
+        } catch {
+          /* ignore — keep the session-derived name */
+        }
+      })();
     }
 
     // Use getSession() — it reads the locally-stored session (fast, no network),

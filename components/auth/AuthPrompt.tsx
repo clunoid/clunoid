@@ -88,9 +88,33 @@ export function AuthPrompt() {
     try {
       if (mode === "signup") {
         const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { name } } });
-        if (error) throw error;
+        if (error) {
+          // They already have an account → if the password is right, just sign in.
+          if (/already.*regist|already.*exist|already been/i.test(error.message)) {
+            const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+              email,
+              password,
+            });
+            if (signInError) {
+              setMsg("You already have an account — please use the right password (or Sign in).");
+              setBusy(false);
+              return;
+            }
+            finishAuth(
+              signInData.user,
+              name ||
+                (signInData.user.user_metadata?.name as string) ||
+                (signInData.user.user_metadata?.full_name as string) ||
+                undefined
+            );
+            return;
+          }
+          throw error;
+        }
         if (data.user) {
-          await supabase.from("profiles").upsert({ id: data.user.id, display_name: name });
+          // The DB trigger creates the profile; this is a non-blocking nicety so
+          // it can never stall the sign-up from completing.
+          void supabase.from("profiles").upsert({ id: data.user.id, display_name: name });
           finishAuth(data.user, name);
         }
       } else {
