@@ -383,6 +383,10 @@ export const useClunoid = create<ClunoidStore>()(
       // persisted, so Isaac resumes idle and the user simply carries on.
       name: "clunoid-session",
       version: 1,
+      // Don't auto-rehydrate during React's SSR hydration — that race could
+      // clobber a freshly-set live scene (cards/media vanishing until a manual
+      // refresh). The Stage calls rehydrate() once, deterministically, on mount.
+      skipHydration: true,
       partialize: (s) => ({
         experience: s.experience,
         explainerIndex: s.explainerIndex,
