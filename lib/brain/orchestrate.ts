@@ -1,9 +1,9 @@
 import { generateObject, generateText, type CoreMessage } from "ai";
 import { z } from "zod";
 import { MODELS, hasGroq, hasAnthropic } from "@/lib/models";
-import { ISAAC_PERSONA, contextPreamble, stageState, dateLine } from "./prompts";
+import { ISAAC_PERSONA, contextPreamble, dateLine } from "./prompts";
 import type { BrainContext, BrainRequest, Turn } from "./types";
-import type { Scene } from "./scene";
+import type { Scene, CalcMedia } from "./scene";
 import {
   pickCountry,
   flagUrl,
@@ -76,57 +76,6 @@ async function isaacLine(system: string, messages: CoreMessage[], fallback: stri
   }
 }
 
-// ── Fast decision via plain text + tolerant JSON parse (no slow structured mode) ──
-
-type Decision = {
-  say: string;
-  action: "talk" | "fact" | "start_flags" | "math" | "signup" | "login" | "stop";
-  query?: string;
-  clear?: boolean;
-};
-
-function parseDecision(text: string): Decision | null {
-  try {
-    const a = text.indexOf("{");
-    const b = text.lastIndexOf("}");
-    if (a === -1 || b === -1) return null;
-    const obj = JSON.parse(text.slice(a, b + 1));
-    if (typeof obj.say !== "string" || typeof obj.action !== "string") return null;
-    return obj as Decision;
-  } catch {
-    return null;
-  }
-}
-
-async function decide(req: BrainRequest, ctx: BrainContext): Promise<Decision | null> {
-  const system = `${ISAAC_PERSONA}${dateLine(ctx)}${contextPreamble(ctx)}${stageState(req.experience)}
-
-Decide your reply and ONE action. Respond with ONLY a single-line JSON object, nothing else:
-{"say":"...","action":"talk|fact|start_flags|math|signup|login|stop","query":"...","clear":false}
-
-Actions:
-- talk: ONLY pure conversation with no real-world subject — greetings, opinions, small talk, how you're doing. Put the reply in "say".
-- fact: the user asks about ANY real-world subject — a person, place, country, organisation, event, landmark, concept, "tell me about / what is / who is / explain / describe X", or anything where recency/accuracy matters. Set "query" to the subject's name (for "who leads country X", set it to the country). This fetches verified info AND a related picture to show — so PREFER this whenever there's a concrete topic. Keep "say" brief; the grounded answer is spoken for you. NEVER answer facts from memory.
-- start_flags: begin a flag-guessing game.
-- math: a calculation or worked solution — set "query" to the problem.
-- signup / login: account actions. stop: clear the Stage.
-When in doubt between talk and fact, choose fact. Never guess at facts.`;
-
-  try {
-    const { text } = await generateText({
-      model: MODELS.fast(),
-      system,
-      messages: toMessages(req.history, req.text),
-      temperature: 0.4,
-      maxTokens: 600,
-      maxRetries: 1,
-    });
-    return parseDecision(text);
-  } catch {
-    return null;
-  }
-}
-
 // ── Fact answer, grounded in current data (+ related image) ────────────
 
 const OFFICEHOLDER =
@@ -164,7 +113,6 @@ const FACTUAL_LEAD =
   /^(tell me (more )?about|tell me|what is|what are|what's|whats|who is|who's|whos|who are|who was|who were|explain|describe|where is|where are|when was|when is|when did|how (tall|big|old|far|deep|long|high|heavy) is|give me (some )?(info|information|facts) (on|about)|show me|show|find me|find|i want to see|let me see|can you show( me)?|get me)\b/i;
 const MATHISH =
   /(\d+\s*[+\-*/×^]\s*\d+)|\b(plus|minus|times|divided by|multiplied|calculate|solve|derivative|integral|equation|square root|percent of)\b/i;
-const PERSONAL = /\b(your|my)\b|\bthe (time|date|day|weather)\b/i;
 
 // Anything time-sensitive / newsy → needs live web search, not static sources.
 const CURRENTISH_Q =
@@ -175,14 +123,25 @@ const CURRENTISH_Q =
 const DATE_Q =
   /\btoday'?s date\b|\bwhat day is it\b|\bwhat time is it\b|\bwhen is today\b|^what'?s?(\s+is)?\s+(the\s+)?(date|time|day)\b/i;
 
-function looksFactual(text: string): boolean {
-  if (MATHISH.test(text) || PERSONAL.test(text)) return false;
-  return FACTUAL_LEAD.test(text.trim());
+// Identity questions → answer from the account and pop the profile open.
+const IDENTITY_Q =
+  /\b(what('?s| is)? my name|who am i|my account|my profile|my details|when did i (join|sign ?up|register|create)|do you (know|remember) (me|my name)|what do you know about me)\b/i;
+
+// Newsy / current-event detection → boost the search query for freshness.
+function isNewsy(text: string): boolean {
+  return (
+    /\b(news|headlines?|breaking|current events|what'?s happening|what is happening|trending)\b/i.test(text) ||
+    CURRENTISH_Q.test(text)
+  );
 }
 
-function looksCurrent(text: string): boolean {
-  if (MATHISH.test(text)) return false;
-  return CURRENTISH_Q.test(text);
+// A pure greeting / acknowledgement (no real subject to research) → brief reply.
+function isSmallTalk(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (t.split(/\s+/).length > 5) return false; // anything longer is a real request
+  return /^(hi+|hey+|hello+|yo|hiya|howdy|sup|wass?up|what'?s up|whats up|greetings|thanks?|thank you|thanx|thx|ty|cheers|cool|nice|wow|ok(ay)?|kk|great|awesome|amazing|perfect|lovely|haha+|lol|lmao|good (job|one|stuff|morning|afternoon|evening|night)|well done|nice one|bye+|goodbye|see ya|see you|later|how are you|how'?s it going|how are things|you (there|good|ok))[!.\s?]*$/i.test(
+    t
+  );
 }
 
 function extractTopic(text: string): string {
@@ -358,8 +317,8 @@ const explainerGenSchema = z.object({
           .describe("Include for EVERY beat — the visuals must track exactly what you're saying."),
       })
     )
-    .min(5)
-    .max(10),
+    .min(3)
+    .max(14),
 });
 
 async function buildExplainer(query: string, question: string, ctx: BrainContext): Promise<Scene> {
@@ -383,7 +342,7 @@ async function buildExplainer(query: string, question: string, ctx: BrainContext
       schema: explainerGenSchema,
       system: `${ISAAC_PERSONA}${dateLine(
         ctx
-      )}\nBuild a thorough, engaging spoken explainer that fully answers the user, using the verified facts below where they apply (for well-known stories/topics you may also use common knowledge, but never invent specifics). Make it genuinely informative — typically 6-9 beats — covering the essentials AND, where relevant, history, key facts, notable figures, and the LATEST developments. Build naturally so the user truly understands and feels satisfied; don't leave out important details.
+      )}\nBuild a thorough, engaging spoken explainer that fully answers the user, using the verified facts below where they apply (for well-known stories/topics you may also use common knowledge, but never invent specifics). Scale the LENGTH to the request: use only a few beats (3-5) for a simple or narrow question, and many (up to a dozen or more) for a rich subject — a full history, a deep "tell me everything", or a news roundup. Cover the essentials AND, where relevant, history, key facts, notable figures, and the LATEST developments. Never pad a simple ask, and never cut important detail from a big one. Build naturally so the user truly understands and feels satisfied.
 
 For EACH beat, give one to three natural spoken sentences AND a "media" visual that depicts EXACTLY what you are saying in that beat — the specific objects, action, or people, not a vague theme. Include media on EVERY beat. Examples: you say "he loaded a stone into his sling" → query "leather sling and a smooth stone", type "photo". You say Trump and Putin met in Alaska → query "Donald Trump and Vladimir Putin meeting Alaska summit", type "photo". You introduce one named thing → type "entity" with its proper name. Only use type "clip" for purely generic atmosphere where no specific real footage is needed. Add a short label.
 Plan the visuals to fit the timeline: for a history of a person/place/country, move the media from the OLDEST relevant imagery to the LATEST as the story progresses. Make each beat's media DIFFERENT (no repetition) unless the same visual genuinely fits best.
@@ -438,43 +397,187 @@ State only established facts — never predictions, rumours, or opinions as fact
   };
 }
 
-// ── Math executor (Claude for accuracy; teaches in `say`) ──────────────
+// ── Calculation engine (Claude for accuracy; verified, fully worked) ──────────
+// ANY calculation — math, physics, chemistry, biology, finance, stats, etc. The
+// brain solves AND verifies, then teaches step-by-step with a context/facts card
+// and related media. Steps narrate one-at-a-time (synced to the cards on screen).
 
-const mathSchema = z.object({
-  say: z.string().describe("Isaac teaching the solution OUT LOUD — conversational, complete. Not just an intro."),
-  title: z.string().optional(),
+// Anything that should be SOLVED and shown step-by-step (not just explained).
+const CALC =
+  /\\frac|\\sqrt|\\sum|\\int|\\cdot|\\times|\\div|[=≈≠≤≥]|√|∑|∫|÷|\^|\b\d+\s*[+\-*/×÷^]\s*\d+|\b(solve|calculate|compute|evaluate|simplify|factor(ise|ize)?|differentiate|integrate|derivative|integral|equation|the value of|find x|solve for|how much is|what'?s\s+\d|convert\s+\d|percent(age)? of|\d+\s*%|interest rate|compound interest|velocity|acceleration|momentum|kinetic energy|molar mass|moles? of|concentration|standard deviation|probability of|area of|volume of|perimeter of)\b/i;
+
+function isCalculation(text: string): boolean {
+  return CALC.test(text) || MATHISH.test(text);
+}
+
+const calcGenSchema = z.object({
+  kind: z
+    .string()
+    .describe(
+      "Short badge label for the TYPE of calculation, e.g. 'Algebra', 'Vectors', 'Newton's 2nd Law', 'Stoichiometry', 'Compound Interest', 'Probability'."
+    ),
+  title: z.string().describe("A clean, plain restatement of the problem (no LaTeX wrappers)."),
+  intro: z
+    .string()
+    .describe(
+      "ONE brief sentence said BEFORE teaching: what kind of calculation this is and what we're finding. Keep it short and warm."
+    ),
   steps: z
-    .array(z.object({ latex: z.string().optional(), text: z.string() }))
-    .min(1)
-    .describe("Only as many steps as the problem genuinely needs — one is fine."),
-  finalAnswer: z.string().optional(),
+    .array(
+      z.object({
+        say: z.string().describe("What Isaac SAYS OUT LOUD for THIS step — natural, teaching this one move clearly."),
+        title: z.string().describe("A very short heading for the step, e.g. 'Cross-multiply'."),
+        text: z.string().describe("The written explanation of this step for the card."),
+        latex: z.string().optional().describe("The math for this step as a KaTeX/LaTeX expression, where applicable."),
+      })
+    )
+    .min(2)
+    .max(12)
+    .describe("EVERY step needed to reach the answer, in order, skipping NOTHING. Make the LAST step VERIFY the answer."),
+  finalAnswer: z
+    .string()
+    .optional()
+    .describe(
+      "Use ONLY when the problem asks for ONE quantity: the brief final result with units, in SIMPLEST form as a DECIMAL (never a fraction) — e.g. 'H = 25 m' or 'x = 0.75'. No working, no caveats."
+    ),
+  answers: z
+    .array(z.object({ label: z.string(), value: z.string() }))
+    .optional()
+    .describe(
+      "Use when the problem has MULTIPLE sub-questions (e.g. orbital period, speed, total energy). One point per quantity: label = what it is, value = the brief result with units in SIMPLEST form as a DECIMAL (never a fraction). Use this OR finalAnswer, not both."
+    ),
+  context: z.object({
+    summary: z.string().describe("1-2 sentences: what type of calculation this is and the core idea/method."),
+    formula: z.string().optional().describe("The key formula used, as a LaTeX expression, if applicable."),
+    facts: z
+      .array(z.string())
+      .default([])
+      .describe("Short verified facts/context points — what the method is, who devised it, its origin, when to use it."),
+    tips: z.array(z.string()).default([]).describe("Short practical tips or common pitfalls."),
+  }),
+  mediaQueries: z
+    .array(z.string())
+    .max(4)
+    .default([])
+    .describe(
+      "1-4 short search phrases for RELATED visuals — the concept, a diagram of the formula, the inventor's name. Real, specific things."
+    ),
 });
 
-async function solveMath(problem: string, ctx: BrainContext): Promise<Scene> {
-  const model = hasAnthropic() ? MODELS.smart() : MODELS.fast();
-  try {
-    const { object } = await generateObject({
-      model,
-      schema: mathSchema,
-      system: `${ISAAC_PERSONA}${dateLine(
-        ctx
-      )}\nSolve this correctly and teach it. "say" is you explaining it aloud, clearly. "steps" is the visual breakdown — only as many as truly needed.`,
-      prompt: problem,
-      temperature: 0.3,
-    });
-    return {
-      say: object.say,
-      expectsInput: "voice",
-      experience: {
-        type: "math_steps",
-        title: object.title,
-        steps: object.steps,
-        finalAnswer: object.finalAnswer,
-      },
-    };
-  } catch {
-    return { say: "Let me try that again — can you restate the problem?", expectsInput: "voice" };
+function calcSystem(ctx: BrainContext): string {
+  return `${ISAAC_PERSONA}${dateLine(
+    ctx
+  )}\nYou are solving a CALCULATION (math, physics, chemistry, biology, finance, statistics — any quantitative field). ACCURACY IS ABSOLUTE — a wrong answer is unacceptable:
+- Use the EXACT values GIVEN in the problem. NEVER assume or substitute a default (e.g. if a radius of 10 m is given, use 10 — never 1). Read every number carefully.
+- Work the complete solution, then VERIFY it by substituting your answer back into EVERY condition in the problem and re-checking the arithmetic. Only finalise once it genuinely checks out.
+- Do not invent missing numbers; if something is truly ambiguous, state the assumption.
+Then teach it step by step, skipping NO step, so a learner follows every single move from start to answer. For EACH step: a short title, the spoken explanation ("say"), the written explanation ("text"), and the math as LaTeX where it applies. Make the LAST step a quick verification (plug the answer back). Also give a brief "intro" (what this is and what we're finding), the context (type, key formula, verified facts, tips), and 1-4 media phrases.
+FINAL ANSWER: give it in SIMPLEST form as a DECIMAL — never a fraction (e.g. 0.75, not 3/4). If the problem asks for ONE quantity use "finalAnswer"; if it asks for SEVERAL (sub-questions like period, speed, energy) put each in "answers" as one short {label, value} point. Keep every value terse with units.`;
+}
+
+async function solveCalc(
+  problem: string,
+  ctx: BrainContext,
+  hint?: string
+): Promise<z.infer<typeof calcGenSchema> | null> {
+  const system = calcSystem(ctx) + (hint ? `\n\nIMPORTANT: ${hint}` : "");
+  const strong = hasAnthropic() ? MODELS.genius() : MODELS.fast();
+  const backup = hasAnthropic() ? MODELS.smart() : MODELS.fast();
+  for (const model of [strong, backup]) {
+    try {
+      const { object } = await generateObject({
+        model,
+        schema: calcGenSchema,
+        system,
+        prompt: problem,
+        temperature: 0.1,
+        maxRetries: 1,
+      });
+      return object;
+    } catch {
+      /* try the backup model next */
+    }
   }
+  return null;
+}
+
+// An independent, terse re-solve used only to cross-check the final answer.
+async function verifyCalc(problem: string, ctx: BrainContext): Promise<string | null> {
+  try {
+    const { text } = await generateText({
+      model: hasAnthropic() ? MODELS.genius() : MODELS.fast(),
+      system: `${dateLine(
+        ctx
+      )}\nSolve this problem yourself, carefully, using the EXACT values given (never assume defaults). Double-check the arithmetic. Reply with ONLY the final answer — the value and its units, nothing else.`,
+      messages: [{ role: "user", content: problem }],
+      temperature: 0,
+      maxTokens: 80,
+      maxRetries: 1,
+    });
+    return text.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// Loose agreement: do the two answers share their key number (within 1%)?
+function answersAgree(a: string, b: string): boolean {
+  const nums = (s: string) => (s.match(/-?\d+(?:\.\d+)?/g) || []).map(Number).filter((n) => Number.isFinite(n));
+  const na = nums(a);
+  const nb = nums(b);
+  if (!na.length || !nb.length) return a.trim().toLowerCase() === b.trim().toLowerCase();
+  const close = (x: number, y: number) => Math.abs(x - y) <= Math.max(1e-6, Math.abs(y) * 0.01);
+  return na.some((x) => nb.some((y) => close(x, y)));
+}
+
+async function buildCalculation(problem: string, ctx: BrainContext): Promise<Scene> {
+  // Solve and independently cross-check IN PARALLEL (both strong) — accuracy
+  // without doubling the wait.
+  const [solved, check] = await Promise.all([solveCalc(problem, ctx), verifyCalc(problem, ctx)]);
+  let object = solved;
+  if (!object) return { say: "Let me try that again — could you restate the problem for me?", expectsInput: "voice" };
+
+  // Combine single/multi answers into one string for the cross-check.
+  const answerText = (o: z.infer<typeof calcGenSchema>) =>
+    o.finalAnswer || (o.answers ?? []).map((a) => `${a.label}: ${a.value}`).join("; ");
+
+  // Reconcile on disagreement with a careful re-solve that sees both answers.
+  if (check && !answersAgree(answerText(object), check)) {
+    const corrected = await solveCalc(
+      problem,
+      ctx,
+      `A first attempt gave "${answerText(object)}" but a careful independent re-check gave "${check}" — these DISAGREE. Re-solve with extreme care using the EXACT given values and arithmetic, and make sure the final answer is correct and consistent with every step.`
+    );
+    if (corrected) object = corrected;
+  }
+
+  // Resolve related media (left side) in parallel — real images/clips only.
+  const media: CalcMedia[] = (
+    await Promise.all(
+      (object.mediaQueries ?? []).slice(0, 4).map(async (query): Promise<CalcMedia | null> => {
+        const m = await resolveBeatMedia({ query, type: "photo" });
+        if (m.videoUrl) return { videoUrl: m.videoUrl, poster: m.poster, caption: query };
+        if (m.imageUrl) return { imageUrl: m.imageUrl, caption: query };
+        return null;
+      })
+    )
+  ).filter((m): m is CalcMedia => m !== null);
+
+  return {
+    say: object.title, // history/label; the intro + steps are what's actually spoken
+    expectsInput: "voice",
+    experience: {
+      type: "calculation",
+      kind: object.kind,
+      title: object.title,
+      intro: object.intro,
+      steps: object.steps,
+      finalAnswer: object.finalAnswer,
+      answers: object.answers,
+      context: object.context,
+      media,
+    },
+  };
 }
 
 // ── Chat / greeting ────────────────────────────────────────────────────
@@ -495,12 +598,57 @@ function needsKeysScene(): Scene {
   };
 }
 
+// ── Date / time — the real client clock, plus what's notable about today ──────
+// "What time is it" stays terse. "What's the date / what day is it" also tells
+// them what today is about (a holiday or famous event) with a matching picture.
+async function dateScene(q: string, ctx: BrainContext): Promise<Scene> {
+  const now = ctx.now ? new Date(ctx.now) : new Date();
+  const fmt = (opts: Intl.DateTimeFormatOptions) => {
+    try {
+      return now.toLocaleString(ctx.locale || "en-US", { timeZone: ctx.timezone, ...opts });
+    } catch {
+      return now.toISOString();
+    }
+  };
+  // A pure "what time is it" stays terse and instant.
+  if (/\btime\b/i.test(q) && !/\b(date|day)\b/i.test(q)) {
+    return { say: `It's ${fmt({ hour: "numeric", minute: "2-digit" })}.`, expectsInput: "voice" };
+  }
+  const full = fmt({ weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const monthDay = fmt({ month: "long", day: "numeric" });
+  // What's notable about today (holiday / famous events) + a real picture.
+  try {
+    if (hasSearch()) {
+      const search = await webSearch(`${monthDay}: holidays, observances and notable historical events`);
+      const facts =
+        search?.answer ||
+        (search?.results?.length ? search.results.slice(0, 3).map((r) => trim(r.content, 320)).join("\n") : "");
+      if (facts) {
+        const say = await groundedSay(
+          `Today is ${full}. In 1-2 warm sentences, tell them today's date and the single most notable thing about ${monthDay} — a holiday or a famous event. Keep it short.`,
+          facts,
+          ctx
+        );
+        const media = await resolveBeatMedia({ query: `${monthDay} holiday celebration`, type: "photo" });
+        return {
+          say,
+          expectsInput: "voice",
+          experience: { type: "rich_card", title: full, body: say, imageUrl: media.imageUrl },
+        };
+      }
+    }
+  } catch {
+    /* fall back to the plain date below */
+  }
+  return { say: `It's ${full}.`, expectsInput: "voice" };
+}
+
 // ── Context-aware planner (used when something is already on the Stage) ──
 // Decides switch vs follow-up vs reaction vs confirmation so Isaac never gets
 // confused or blends topics. Isaac only *speaks content* after a full rebuild.
 
 type Plan = {
-  intent: "explain" | "ask_switch" | "continue" | "react" | "chat" | "math" | "flags" | "signup" | "login";
+  intent: "explain" | "continue" | "react" | "chat" | "math" | "flags" | "signup" | "login";
   topic?: string;
   say?: string;
 };
@@ -508,7 +656,7 @@ type Plan = {
 function currentTopicLabel(req: BrainRequest): string {
   const e = req.experience;
   if (e?.type === "explainer" || e?.type === "rich_card") return String(e.title ?? "the current topic");
-  if (e?.type === "math_steps") return "a math solution";
+  if (e?.type === "math_steps" || e?.type === "calculation") return "a worked calculation";
   if (e?.type === "flag_quiz") return "a flag game";
   return "the current topic";
 }
@@ -529,17 +677,16 @@ async function planWithContext(req: BrainRequest, ctx: BrainContext): Promise<Pl
   const topic = currentTopicLabel(req);
   const system = `${ISAAC_PERSONA}${dateLine(
     ctx
-  )}\nThere is content on the Stage right now about: "${topic}". Decide how to handle the user's latest message so you are NEVER confused and never blend topics. Respond with ONLY a single-line JSON object:
-{"intent":"explain|ask_switch|continue|react|chat|math|flags|signup|login","topic":"...","say":"..."}
+  )}\nThere is content on the Stage right now about: "${topic}". Treat the user's latest message as a COMMAND to act on — NEVER ask whether they want to switch, just do it. Respond with ONLY a single-line JSON object:
+{"intent":"explain|continue|react|chat|math|flags|signup|login","topic":"...","say":"..."}
 Rules:
-- A clear request for a DIFFERENT complete topic, OR a follow-up clearly RELATED to "${topic}" → "explain" with "topic" set (we rebuild fresh — no blending).
-- Just a short bare new subject unrelated to "${topic}" (e.g. only "North Korea") → "ask_switch"; write "say" as a brief question confirming they want to move to it (e.g. "Want me to switch over to North Korea?"). Leave "topic" empty.
-- If you just asked whether to switch and they AGREE (yes/sure/go ahead) → "explain" with "topic" = the subject you offered. If they DECLINE (no/not now) → "continue" with a brief "okay, staying here" in "say".
-- A reaction or comment (e.g. "I love this", "thanks", or they dislike it) → "react"; "say" = a VERY brief warm acknowledgement (one short sentence). If they're unhappy, ask what they'd like instead.
+- ANY new subject — a full question OR even a single bare word that names a different thing (e.g. just "Trump", "Mars", "news") → "explain" with "topic" = that subject. Switch to it immediately; do NOT ask, do NOT confirm.
+- A follow-up that goes DEEPER on "${topic}" → "explain" with "topic" = the specific follow-up (we rebuild fresh — no blending).
 - "continue" / "carry on" / "keep going" / "where were you" → "continue" with "say" = a 2-4 word lead-in like "Sure, picking it up.". The explainer resumes automatically afterwards — do NOT re-explain anything.
-- A math problem → "math" ("topic"=the problem). A flag game request → "flags". Account actions → "signup"/"login".
-- Otherwise smalltalk → "chat" with a short "say".
-IMPORTANT: ask_switch / continue / react / chat replies must be SHORT acknowledgements only — NEVER give facts, opinions, or explanations in them. Anything informational MUST be "explain" so it gets a card and media.`;
+- A pure reaction with no subject (e.g. "I love this", "thanks", "nice") → "react"; "say" = a VERY brief warm acknowledgement (one short sentence).
+- A calculation of ANY kind (math, physics, chemistry, finance, an equation, "solve…", "the value of x", anything to be worked out) → "math" ("topic"=the full problem). A flag game request → "flags". Account actions → "signup"/"login".
+- Only truly empty small talk with no subject and no reaction → "chat" with a short "say".
+IMPORTANT: continue / react / chat replies must be SHORT acknowledgements only — NEVER give facts, opinions, or explanations in them. Anything with a subject MUST be "explain" so it gets a fresh card and media. When unsure, prefer "explain".`;
   try {
     const { text } = await generateText({
       model: MODELS.fast(),
@@ -560,19 +707,90 @@ IMPORTANT: ask_switch / continue / react / chat replies must be SHORT acknowledg
 export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise<Scene> {
   if (!hasGroq()) return needsKeysScene();
 
-  if (req.kind === "greeting") {
+  // An account state just changed (sign up / sign in / sign out). The brain
+  // decides — in real time — what Isaac says, so the spoken word always matches
+  // what actually happened. Always ONE short, fresh sentence (never narrate UI).
+  if (req.kind === "auth_event") {
+    const name = ctx.user?.name || req.user?.name;
+    const persona = ISAAC_PERSONA + dateLine(ctx);
+
+    if (req.event === "signed_out") {
+      const say = await isaacLine(
+        persona,
+        [
+          {
+            role: "user",
+            content: `${
+              name ? `${name} is` : "They are"
+            } signing out right now. Say a warm, brief ONE-sentence goodbye that reassures them you'll pick up right where you left off whenever they come back. Do NOT invent, name, or reference any specific topic or subject — keep it general. No questions, no narration.`,
+          },
+        ],
+        `Anytime${name ? `, ${name}` : ""} — come back whenever and we'll pick up right where we left off.`
+      );
+      return { say, clear: true, expectsInput: "none" };
+    }
+
+    if (req.event === "signed_up") {
+      const say = await isaacLine(
+        persona + contextPreamble(ctx),
+        [
+          {
+            role: "user",
+            content: `${
+              name || "They"
+            } just created their account. In ONE warm, fresh sentence, welcome them by name and let them know they can ask about anything — out loud or typed. Keep it short; don't describe the screen.`,
+          },
+        ],
+        `You're all set${name ? `, ${name}` : ""}! Ask me anything — say it or type it — and I'll show you.`
+      );
+      return { say, expectsInput: "voice" };
+    }
+
+    // signed_in → welcome back; keep any content on screen and resume it after.
     const say = await isaacLine(
-      ISAAC_PERSONA + dateLine(ctx) + contextPreamble(ctx),
+      persona + contextPreamble(ctx),
+      [
+        {
+          role: "user",
+          content: `${
+            name || "They"
+          } just signed back in. Welcome them back by name in ONE short, fresh sentence and invite them to continue or explore something new. Keep it short; don't describe the screen.`,
+        },
+      ],
+      `Welcome back${name ? `, ${name}` : ""}! What shall we get into?`
+    );
+    return { say, keep: true, resume: true, expectsInput: "voice" };
+  }
+
+  if (req.kind === "greeting") {
+    if (ctx.user?.isAuthed) {
+      const say = await isaacLine(
+        ISAAC_PERSONA + dateLine(ctx) + contextPreamble(ctx),
+        [
+          {
+            role: "user",
+            content: `Greet ${ctx.user?.name || "them"} back warmly by name in ONE short, fresh sentence, and invite them to explore anything.`,
+          },
+        ],
+        `Welcome back${ctx.user?.name ? `, ${ctx.user.name}` : ""}! What shall we dive into?`
+      );
+      return { say, expectsInput: "voice" };
+    }
+    // New / signed-out → a brief, sweet intro that opens the sign-up form. The
+    // form is opening on its own — invite them to fill it in, but NEVER narrate
+    // the screen (no "a form appears"). One short, warm sentence.
+    const say = await isaacLine(
+      ISAAC_PERSONA + dateLine(ctx),
       [
         {
           role: "user",
           content:
-            "This is the very first thing you say. Greet me as Isaac in ONE short, warm sentence (under 20 words) and invite me to talk or play. Be fresh, not generic.",
+            "Say hello and introduce yourself as Isaac in ONE short, warm sentence, and invite them to pop their name and email in to get started so you can remember them and make this theirs. Sign-up is INSTANT — never mention confirming email. Don't ask whether they want an account, and don't describe the screen — just warmly invite them in.",
         },
       ],
-      "Hey, I'm Isaac — ask me anything, or say 'let's play flags'."
+      "Hey, I'm Isaac — pop your name and email in and I'll remember you and make all of this yours."
     );
-    return { say, expectsInput: "voice" };
+    return { say, auth: "signup", expectsInput: "none" };
   }
 
   // Flag guess/next are handled locally on the client now; keep safe fallbacks.
@@ -597,39 +815,58 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
 
   // utterance
   const q = req.text ?? "";
-  // Date/time questions → built directly from the real client clock: accurate,
-  // deterministic, no model guessing, no card divergence.
-  if (DATE_Q.test(q.trim())) {
-    const now = ctx.now ? new Date(ctx.now) : new Date();
-    let when = now.toISOString();
-    try {
-      when = now.toLocaleString(ctx.locale || "en-US", {
-        timeZone: ctx.timezone,
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      });
-    } catch {
-      /* keep ISO */
+  // Date/time questions → the real client clock (accurate, deterministic), plus
+  // what today is about when they ask for the date.
+  if (DATE_Q.test(q.trim())) return dateScene(q, ctx);
+
+  // Identity questions → from the account (pops the profile open), or invite signup.
+  if (IDENTITY_Q.test(q)) {
+    if (ctx.user?.isAuthed) {
+      let created = "";
+      if (ctx.user.createdAt) {
+        try {
+          created = new Date(ctx.user.createdAt).toLocaleDateString(ctx.locale || "en-US", {
+            timeZone: ctx.timezone,
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+      const name = ctx.user.name;
+      const say = name
+        ? `You're ${name}${created ? `, and you joined Clunoid on ${created}` : ""}. There you are — that's you.`
+        : `You're signed in${created ? `, and you joined on ${created}` : ""}.`;
+      return { say, showProfile: true, keep: true, resume: true, expectsInput: "voice" };
     }
-    return { say: `It's ${when}.`, expectsInput: "voice" };
+    return {
+      say: "We haven't properly met yet! Let's create your account so I can remember you and make this personal.",
+      auth: "signup",
+      expectsInput: "none",
+    };
   }
 
   // If content is already on the Stage, plan with context so Isaac never gets
   // confused (switch vs follow-up vs reaction vs confirming a switch). Content
   // is only ever spoken after a full rebuild; short replies keep the screen.
   const onScreen = req.experience?.type;
-  if (onScreen === "explainer" || onScreen === "rich_card" || onScreen === "math_steps") {
+  if (
+    onScreen === "explainer" ||
+    onScreen === "rich_card" ||
+    onScreen === "math_steps" ||
+    onScreen === "calculation"
+  ) {
     const plan = await planWithContext(req, ctx);
     if (plan) {
       switch (plan.intent) {
         case "explain":
+          // A calculation hiding inside a follow-up still gets the worked treatment.
+          if (isCalculation(plan.topic || q)) return buildCalculation(plan.topic || q, ctx);
           return buildExplainer(plan.topic || q, plan.topic || q, ctx);
         case "math":
-          return solveMath(plan.topic || q, ctx);
+          return buildCalculation(plan.topic || q, ctx);
         case "flags": {
           const c = pickCountry();
           return buildFlagScene(c, 1, 0, "Let's play! Which country does this flag belong to?");
@@ -638,9 +875,6 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
           return { say: plan.say || "Let's set up your account.", auth: "signup", expectsInput: "none" };
         case "login":
           return { say: plan.say || "Welcome back.", auth: "login", expectsInput: "none" };
-        case "ask_switch":
-          // Ask, keep content, and WAIT for the answer (no resume).
-          return { say: plan.say || "Want me to switch to that?", keep: true, expectsInput: "voice" };
         // continue / react / chat → brief reply, KEEP content, then RESUME where Isaac left off.
         default:
           return {
@@ -654,48 +888,45 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
     // planner failed → fall through to the default routing below.
   }
 
+  // ── From here, Clunoid behaves like a search engine: ANY word, phrase, or
+  // question becomes a thought-through, media-backed answer. We never ignore an
+  // input, never ask "did you mean…", and never ramble — we research and show. ──
+
+  // Explicit account actions.
+  if (/\b(sign\s?up|create (an )?account|register|make (me )?an account)\b/i.test(q))
+    return { say: "Let's set you up.", auth: "signup", expectsInput: "none" };
+  if (/\b(sign\s?in|log\s?in)\b/i.test(q))
+    return { say: "Let's get you back in.", auth: "login", expectsInput: "none" };
+
+  // Clear the Stage.
+  if (/^(stop|clear|reset|never\s?mind|that'?s all|nothing( else)?)\b/i.test(q.trim()))
+    return { say: "Cleared — what would you like next?", clear: true, expectsInput: "voice" };
+
+  // A calculation or worked problem (any field) → verified, step-by-step solution.
+  if (isCalculation(q)) return buildCalculation(q, ctx);
+
+  // A flag game, only when actually requested.
+  if (/\b(flags?|guess.*countr|play.*(game|flag)|quiz)\b/i.test(q)) {
+    const c = pickCountry();
+    const intros = [
+      "Let's play! Which country does this flag belong to?",
+      "Here we go — name this flag for me.",
+      "Alright, first flag. Which country is this?",
+      "Game on! What country flies this flag?",
+    ];
+    return buildFlagScene(c, 1, 0, intros[Math.floor(Math.random() * intros.length)]);
+  }
+
   // "Who currently leads X?" → quick authoritative card (Wikidata). Fast, single fact.
   if (OFFICEHOLDER.test(q) && CURRENTISH.test(q)) return factScene(extractTopic(q), q, ctx);
 
-  // Any other topic / current-event question → a synced visual EXPLAINER
-  // (images appear as Isaac narrates). This is the default for "anything about X".
-  if (looksFactual(q) || looksCurrent(q)) return buildExplainer(extractTopic(q), q, ctx);
+  // Pure greeting / acknowledgement (no subject to research) → a brief, warm reply.
+  if (isSmallTalk(q)) return chatReply(q, ctx, req.history ?? []);
 
-  // otherwise let the router decide (flags / math / auth / talk)
-  const d = await decide(req, ctx);
-  if (!d) return chatReply(req.text ?? "", ctx, req.history ?? []); // graceful, never "say that again"
-
-  switch (d.action) {
-    case "fact":
-      return buildExplainer(d.query || req.text || "", req.text || d.query || "", ctx);
-    case "start_flags": {
-      // Only ever start a game when the user actually asked — never force it.
-      if (!/\b(flag|flags|guess.*countr|play.*(game|flag)|quiz)\b/i.test(q)) {
-        return {
-          say: "Sure — whenever you'd like, just say 'let's play flags' and I'll start a round. What would you like to do?",
-          expectsInput: "voice",
-        };
-      }
-      // Isaac can't see which flag the code picked, so use a neutral intro
-      // (no invented hints about the flag).
-      const c = pickCountry();
-      const intros = [
-        "Let's play! Which country does this flag belong to?",
-        "Here we go — name this flag for me.",
-        "Alright, first flag. Which country is this?",
-        "Game on! What country flies this flag?",
-      ];
-      return buildFlagScene(c, 1, 0, intros[Math.floor(Math.random() * intros.length)]);
-    }
-    case "math":
-      return solveMath(d.query || req.text || "", ctx);
-    case "signup":
-      return { say: d.say, auth: "signup", expectsInput: "none" };
-    case "login":
-      return { say: d.say, auth: "login", expectsInput: "none" };
-    case "stop":
-      return { say: d.say, clear: true, expectsInput: "voice" };
-    default:
-      return { say: d.say, clear: d.clear, expectsInput: "voice" };
-  }
+  // DEFAULT — research the topic and build a synced visual explainer. News and
+  // current events get a freshness-boosted query so the very latest is covered.
+  const question = isNewsy(q)
+    ? `Latest news and developments, most important first${ctx.location ? `, near ${ctx.location}` : ""}: ${q}`
+    : q;
+  return buildExplainer(extractTopic(q), question, ctx);
 }

@@ -5,6 +5,7 @@ import { FlagQuiz } from "./FlagQuiz";
 import { StepByStepMath } from "./StepByStepMath";
 import { RichCard } from "./RichCard";
 import { Explainer } from "./Explainer";
+import { CalculationView } from "./CalculationView";
 
 /**
  * Maps a validated Experience to its React component. Adding a new experience
@@ -21,6 +22,8 @@ export function renderExperience(exp: Experience) {
       return <RichCard data={exp} />;
     case "explainer":
       return <Explainer data={exp} />;
+    case "calculation":
+      return <CalculationView data={exp} />;
     default:
       return null;
   }

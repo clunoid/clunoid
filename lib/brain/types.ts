@@ -5,7 +5,7 @@ export type Turn = { role: "user" | "isaac"; content: string };
 
 /** Grounding context assembled server-side before calling a model. */
 export type BrainContext = {
-  user?: { name?: string; isAuthed: boolean };
+  user?: { name?: string; isAuthed: boolean; email?: string; createdAt?: string };
   /** Long-term facts recalled about the user. */
   memory?: string;
   /** Rolling summary of the current conversation. */
@@ -28,15 +28,22 @@ export type ClientContext = {
 /** What the client sends to /api/brain. */
 export type BrainRequest = {
   /** The kind of interaction — lets us grade games locally and route cheaply. */
-  kind: "greeting" | "utterance" | "flag_guess" | "flag_next";
+  kind: "greeting" | "utterance" | "flag_guess" | "flag_next" | "auth_event";
+  /**
+   * For kind "auth_event": which account change just happened, so the brain can
+   * decide in real time what Isaac says (welcome / welcome-back / goodbye).
+   */
+  event?: "signed_up" | "signed_in" | "signed_out";
   /** The user's words (for utterance / flag_guess). */
   text?: string;
   /** Short rolling window of recent turns for grounding. */
   history?: Turn[];
   /** The experience currently on the Stage, if any (e.g. the active flag). */
   experience?: (Partial<Experience> & { type: string }) | null;
+  /** Whether the sign-up / sign-in form is currently open on screen. */
+  authOpen?: boolean;
   /** Lightweight user state from the client. */
-  user?: { name?: string; isAuthed: boolean };
+  user?: { name?: string; isAuthed: boolean; email?: string; createdAt?: string };
   /** Accurate time/locale from the browser. */
   client?: ClientContext;
 };
