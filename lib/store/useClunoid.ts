@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { SpeechPlayer } from "@/lib/voice/speech";
 import { getSupabaseBrowser } from "@/lib/supabase/client";
-import type { Scene, Experience, ExplainerExperience } from "@/lib/brain/scene";
+import type { Scene, Experience, ExplainerExperience, CalculationExperience } from "@/lib/brain/scene";
 import type { BrainRequest, Turn } from "@/lib/brain/types";
 import {
   autocorrectCountry,
@@ -155,12 +155,27 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
     }
   }
 
+  // Teach a calculation step-by-step — each step's card reveals as Isaac says it
+  // (same synced-playback model as the explainer; explainerIndex = current step).
+  async function playCalculationFrom(calc: CalculationExperience, start: number, seq: number) {
+    for (let i = Math.max(0, start); i < calc.steps.length; i++) {
+      if (seq !== playSeq) return; // superseded / interrupted
+      set({ caption: calc.steps[i].say, spokenChars: 0, explainerIndex: i, isaac: "speaking" });
+      await getPlayer(set).play(calc.steps[i].say, (c) => set({ spokenChars: c }));
+    }
+  }
+
   async function applyScene(scene: Scene) {
     const seq = ++playSeq;
     const exp = scene.experience ?? null;
     const newExplainer = !scene.keep && exp?.type === "explainer" ? exp : null;
+    const newCalc = !scene.keep && exp?.type === "calculation" ? exp : null;
     set((s) => ({
-      caption: newExplainer ? newExplainer.beats[0]?.say ?? scene.say : scene.say,
+      caption: newExplainer
+        ? newExplainer.beats[0]?.say ?? scene.say
+        : newCalc
+        ? newCalc.steps[0]?.say ?? scene.say
+        : scene.say,
       spokenChars: 0,
       explainerIndex: scene.keep ? s.explainerIndex : 0,
       guessFeedback: null,
@@ -184,6 +199,8 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
 
     if (newExplainer) {
       await playExplainerFrom(newExplainer, 0, seq);
+    } else if (newCalc) {
+      await playCalculationFrom(newCalc, 0, seq);
     } else {
       // A short interactive reply (acknowledgement / question).
       await getPlayer(set).play(scene.say, (chars) => set({ spokenChars: chars }));

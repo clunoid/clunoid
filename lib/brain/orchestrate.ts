@@ -3,7 +3,7 @@ import { z } from "zod";
 import { MODELS, hasGroq, hasAnthropic } from "@/lib/models";
 import { ISAAC_PERSONA, contextPreamble, dateLine } from "./prompts";
 import type { BrainContext, BrainRequest, Turn } from "./types";
-import type { Scene } from "./scene";
+import type { Scene, CalcMedia } from "./scene";
 import {
   pickCountry,
   flagUrl,
@@ -397,43 +397,100 @@ State only established facts — never predictions, rumours, or opinions as fact
   };
 }
 
-// ── Math executor (Claude for accuracy; teaches in `say`) ──────────────
+// ── Calculation engine (Claude for accuracy; verified, fully worked) ──────────
+// ANY calculation — math, physics, chemistry, biology, finance, stats, etc. The
+// brain solves AND verifies, then teaches step-by-step with a context/facts card
+// and related media. Steps narrate one-at-a-time (synced to the cards on screen).
 
-const mathSchema = z.object({
-  say: z.string().describe("Isaac teaching the solution OUT LOUD — conversational, complete. Not just an intro."),
-  title: z.string().optional(),
+// Anything that should be SOLVED and shown step-by-step (not just explained).
+const CALC =
+  /\\frac|\\sqrt|\\sum|\\int|\\cdot|\\times|\\div|[=≈≠≤≥]|√|∑|∫|÷|\^|\b\d+\s*[+\-*/×÷^]\s*\d+|\b(solve|calculate|compute|evaluate|simplify|factor(ise|ize)?|differentiate|integrate|derivative|integral|equation|the value of|find x|solve for|how much is|what'?s\s+\d|convert\s+\d|percent(age)? of|\d+\s*%|interest rate|compound interest|velocity|acceleration|momentum|kinetic energy|molar mass|moles? of|concentration|standard deviation|probability of|area of|volume of|perimeter of)\b/i;
+
+function isCalculation(text: string): boolean {
+  return CALC.test(text) || MATHISH.test(text);
+}
+
+const calcGenSchema = z.object({
+  kind: z
+    .string()
+    .describe(
+      "Short badge label for the TYPE of calculation, e.g. 'Algebra', 'Vectors', 'Newton's 2nd Law', 'Stoichiometry', 'Compound Interest', 'Probability'."
+    ),
+  title: z.string().describe("A clean, plain restatement of the problem (no LaTeX wrappers)."),
   steps: z
-    .array(z.object({ latex: z.string().optional(), text: z.string() }))
-    .min(1)
-    .describe("Only as many steps as the problem genuinely needs — one is fine."),
-  finalAnswer: z.string().optional(),
+    .array(
+      z.object({
+        say: z.string().describe("What Isaac SAYS OUT LOUD for THIS step — natural, teaching this one move clearly."),
+        title: z.string().describe("A very short heading for the step, e.g. 'Cross-multiply'."),
+        text: z.string().describe("The written explanation of this step for the card."),
+        latex: z.string().optional().describe("The math for this step as a KaTeX/LaTeX expression, where applicable."),
+      })
+    )
+    .min(2)
+    .max(12)
+    .describe("EVERY step needed to reach the answer, in order, skipping NOTHING."),
+  finalAnswer: z.string().describe("The final answer, clearly stated (with units if any)."),
+  context: z.object({
+    summary: z.string().describe("1-2 sentences: what type of calculation this is and the core idea/method."),
+    formula: z.string().optional().describe("The key formula used, as a LaTeX expression, if applicable."),
+    facts: z
+      .array(z.string())
+      .default([])
+      .describe("Short verified facts/context points — what the method is, who devised it, its origin, when to use it."),
+    tips: z.array(z.string()).default([]).describe("Short practical tips or common pitfalls."),
+  }),
+  mediaQueries: z
+    .array(z.string())
+    .max(4)
+    .default([])
+    .describe(
+      "1-4 short search phrases for RELATED visuals — the concept, a diagram of the formula, the inventor's name. Real, specific things."
+    ),
 });
 
-async function solveMath(problem: string, ctx: BrainContext): Promise<Scene> {
+async function buildCalculation(problem: string, ctx: BrainContext): Promise<Scene> {
   const model = hasAnthropic() ? MODELS.smart() : MODELS.fast();
+  let object: z.infer<typeof calcGenSchema>;
   try {
-    const { object } = await generateObject({
+    ({ object } = await generateObject({
       model,
-      schema: mathSchema,
+      schema: calcGenSchema,
       system: `${ISAAC_PERSONA}${dateLine(
         ctx
-      )}\nSolve this correctly and teach it. "say" is you explaining it aloud, clearly. "steps" is the visual breakdown — only as many as truly needed.`,
+      )}\nThe user has a CALCULATION to solve — it may be math, physics, chemistry, biology, finance, statistics, or any quantitative field. SOLVE IT CORRECTLY and VERIFY the answer before finalising — accuracy is non-negotiable, never guess. Then teach it step by step, skipping NO step, so a learner can follow every single move from start to answer. For EACH step give: a short title, the spoken explanation ("say"), the written explanation ("text"), and the math as LaTeX where it applies. Also give context (what type of calculation it is, the key formula, verified facts about the method and where/who it comes from, and useful tips) and 1-4 media search phrases for related visuals. Be dynamic — use as many steps, facts and tips as the problem genuinely needs.`,
       prompt: problem,
-      temperature: 0.3,
-    });
-    return {
-      say: object.say,
-      expectsInput: "voice",
-      experience: {
-        type: "math_steps",
-        title: object.title,
-        steps: object.steps,
-        finalAnswer: object.finalAnswer,
-      },
-    };
+      temperature: 0.2,
+      maxRetries: 1,
+    }));
   } catch {
-    return { say: "Let me try that again — can you restate the problem?", expectsInput: "voice" };
+    return { say: "Let me try that again — could you restate the problem for me?", expectsInput: "voice" };
   }
+
+  // Resolve related media (left side) in parallel — real images/clips only.
+  const media: CalcMedia[] = (
+    await Promise.all(
+      (object.mediaQueries ?? []).slice(0, 4).map(async (query): Promise<CalcMedia | null> => {
+        const m = await resolveBeatMedia({ query, type: "photo" });
+        if (m.videoUrl) return { videoUrl: m.videoUrl, poster: m.poster, caption: query };
+        if (m.imageUrl) return { imageUrl: m.imageUrl, caption: query };
+        return null;
+      })
+    )
+  ).filter((m): m is CalcMedia => m !== null);
+
+  return {
+    say: object.title, // history/label; the steps are what's actually spoken
+    expectsInput: "voice",
+    experience: {
+      type: "calculation",
+      kind: object.kind,
+      title: object.title,
+      steps: object.steps,
+      finalAnswer: object.finalAnswer,
+      context: object.context,
+      media,
+    },
+  };
 }
 
 // ── Chat / greeting ────────────────────────────────────────────────────
@@ -512,7 +569,7 @@ type Plan = {
 function currentTopicLabel(req: BrainRequest): string {
   const e = req.experience;
   if (e?.type === "explainer" || e?.type === "rich_card") return String(e.title ?? "the current topic");
-  if (e?.type === "math_steps") return "a math solution";
+  if (e?.type === "math_steps" || e?.type === "calculation") return "a worked calculation";
   if (e?.type === "flag_quiz") return "a flag game";
   return "the current topic";
 }
@@ -540,7 +597,7 @@ Rules:
 - A follow-up that goes DEEPER on "${topic}" → "explain" with "topic" = the specific follow-up (we rebuild fresh — no blending).
 - "continue" / "carry on" / "keep going" / "where were you" → "continue" with "say" = a 2-4 word lead-in like "Sure, picking it up.". The explainer resumes automatically afterwards — do NOT re-explain anything.
 - A pure reaction with no subject (e.g. "I love this", "thanks", "nice") → "react"; "say" = a VERY brief warm acknowledgement (one short sentence).
-- A math problem → "math" ("topic"=the problem). A flag game request → "flags". Account actions → "signup"/"login".
+- A calculation of ANY kind (math, physics, chemistry, finance, an equation, "solve…", "the value of x", anything to be worked out) → "math" ("topic"=the full problem). A flag game request → "flags". Account actions → "signup"/"login".
 - Only truly empty small talk with no subject and no reaction → "chat" with a short "say".
 IMPORTANT: continue / react / chat replies must be SHORT acknowledgements only — NEVER give facts, opinions, or explanations in them. Anything with a subject MUST be "explain" so it gets a fresh card and media. When unsure, prefer "explain".`;
   try {
@@ -708,14 +765,21 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
   // confused (switch vs follow-up vs reaction vs confirming a switch). Content
   // is only ever spoken after a full rebuild; short replies keep the screen.
   const onScreen = req.experience?.type;
-  if (onScreen === "explainer" || onScreen === "rich_card" || onScreen === "math_steps") {
+  if (
+    onScreen === "explainer" ||
+    onScreen === "rich_card" ||
+    onScreen === "math_steps" ||
+    onScreen === "calculation"
+  ) {
     const plan = await planWithContext(req, ctx);
     if (plan) {
       switch (plan.intent) {
         case "explain":
+          // A calculation hiding inside a follow-up still gets the worked treatment.
+          if (isCalculation(plan.topic || q)) return buildCalculation(plan.topic || q, ctx);
           return buildExplainer(plan.topic || q, plan.topic || q, ctx);
         case "math":
-          return solveMath(plan.topic || q, ctx);
+          return buildCalculation(plan.topic || q, ctx);
         case "flags": {
           const c = pickCountry();
           return buildFlagScene(c, 1, 0, "Let's play! Which country does this flag belong to?");
@@ -751,8 +815,8 @@ export async function orchestrate(req: BrainRequest, ctx: BrainContext): Promise
   if (/^(stop|clear|reset|never\s?mind|that'?s all|nothing( else)?)\b/i.test(q.trim()))
     return { say: "Cleared — what would you like next?", clear: true, expectsInput: "voice" };
 
-  // A calculation or worked problem → step-by-step solution.
-  if (MATHISH.test(q)) return solveMath(q, ctx);
+  // A calculation or worked problem (any field) → verified, step-by-step solution.
+  if (isCalculation(q)) return buildCalculation(q, ctx);
 
   // A flag game, only when actually requested.
   if (/\b(flags?|guess.*countr|play.*(game|flag)|quiz)\b/i.test(q)) {

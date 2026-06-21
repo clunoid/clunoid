@@ -70,11 +70,55 @@ export const explainerSchema = z.object({
   beats: z.array(explainerBeatSchema).min(1),
 });
 
+/**
+ * A worked CALCULATION (any field — math, physics, chemistry, finance, …).
+ * Right side: step cards that reveal one-by-one as Isaac teaches (older ones
+ * collapse). Left side: related media + a facts/context/tips card. A colored
+ * badge (`kind`) labels the type of calculation.
+ */
+export const calcMediaSchema = z.object({
+  imageUrl: z.string().url().optional(),
+  videoUrl: z.string().url().optional(),
+  poster: z.string().url().optional(),
+  caption: z.string().optional(),
+});
+export const calcStepSchema = z.object({
+  /** What Isaac says out loud for this step (narration, synced to its card). */
+  say: z.string(),
+  /** Short heading for the step card, e.g. "Cross-multiply". */
+  title: z.string().optional(),
+  /** Written explanation shown on the card. */
+  text: z.string(),
+  /** The math for this step as a KaTeX/LaTeX expression, if applicable. */
+  latex: z.string().optional(),
+});
+export const calculationSchema = z.object({
+  type: z.literal("calculation"),
+  /** Badge label — the category, e.g. "Algebra", "Vectors", "Newton's 2nd Law". */
+  kind: z.string(),
+  /** A clean restatement of the problem. */
+  title: z.string().optional(),
+  steps: z.array(calcStepSchema).min(1),
+  finalAnswer: z.string().optional(),
+  /** Left-side facts / context / tips card. */
+  context: z
+    .object({
+      summary: z.string().optional(),
+      formula: z.string().optional(),
+      facts: z.array(z.string()).default([]),
+      tips: z.array(z.string()).default([]),
+    })
+    .optional(),
+  /** Left-side related media (inventor, formula, diagrams …). */
+  media: z.array(calcMediaSchema).default([]),
+});
+
 export const experienceSchema = z.discriminatedUnion("type", [
   flagQuizSchema,
   mathStepsSchema,
   richCardSchema,
   explainerSchema,
+  calculationSchema,
 ]);
 
 export type Experience = z.infer<typeof experienceSchema>;
@@ -83,6 +127,8 @@ export type MathStepsExperience = z.infer<typeof mathStepsSchema>;
 export type RichCardExperience = z.infer<typeof richCardSchema>;
 export type ExplainerExperience = z.infer<typeof explainerSchema>;
 export type ExplainerEntity = z.infer<typeof explainerEntitySchema>;
+export type CalculationExperience = z.infer<typeof calculationSchema>;
+export type CalcMedia = z.infer<typeof calcMediaSchema>;
 
 // ── The Scene envelope ─────────────────────────────────────────────────
 
