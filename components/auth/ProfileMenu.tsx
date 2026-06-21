@@ -2,9 +2,31 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { LogOut } from "lucide-react";
+import { LogOut, MapPin, CalendarDays } from "lucide-react";
 import { useClunoid } from "@/lib/store/useClunoid";
 import { cn } from "@/lib/utils";
+
+/**
+ * A friendly "City, Region" from the browser's time zone — no permission prompt.
+ * Both parts come from the SAME source (the IANA zone, e.g. "Africa/Nairobi" →
+ * "Nairobi, Africa") so they never disagree the way zone + locale-country can.
+ */
+function useLocation(): string | null {
+  const [loc, setLoc] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone; // "Africa/Nairobi"
+      const segs = tz.split("/");
+      const city = segs.pop()?.replace(/_/g, " ");
+      const region = segs[0] && segs[0] !== "Etc" ? segs[0].replace(/_/g, " ") : undefined;
+      const value = [city, region].filter(Boolean).join(", ");
+      if (value) setLoc(value);
+    } catch {
+      /* time zone unavailable */
+    }
+  }, []);
+  return loc;
+}
 
 /**
  * Top-right profile. Signed-out users see a "Sign in" pill; signed-in users see
@@ -18,6 +40,7 @@ export function ProfileMenu() {
   const closeProfile = useClunoid((s) => s.closeProfile);
   const signOut = useClunoid((s) => s.signOut);
   const openAuth = useClunoid((s) => s.openAuth);
+  const location = useLocation();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -77,9 +100,19 @@ export function ProfileMenu() {
             </div>
 
             <div className="flex flex-col p-3 text-sm">
+              {location && (
+                <div className="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5">
+                  <span className="flex items-center gap-1.5 text-ink-faint">
+                    <MapPin size={14} /> Location
+                  </span>
+                  <span className="truncate font-medium text-clay-soft">{location}</span>
+                </div>
+              )}
               {joined && (
-                <div className="flex items-center justify-between rounded-lg px-2 py-1.5">
-                  <span className="text-ink-faint">Joined</span>
+                <div className="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5">
+                  <span className="flex items-center gap-1.5 text-ink-faint">
+                    <CalendarDays size={14} /> Joined
+                  </span>
                   <span className="font-medium text-spark-soft">{joined}</span>
                 </div>
               )}
