@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import { Mic, MicOff, Send } from "lucide-react";
 import { useClunoid } from "@/lib/store/useClunoid";
 import { useSpeechInput } from "@/lib/voice/useSpeechInput";
@@ -243,10 +244,17 @@ export function Stage() {
   // ── Live Stage: orb is an unbounded BACKGROUND; everything renders over it ──
   return (
     <main className="stage-bg relative h-[100dvh] w-screen overflow-hidden">
-      {/* Isaac's orb — fixed in the background, never pushed by content */}
-      <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center">
+      {/* Isaac's orb — normally a background, but it rises to the FOREGROUND while
+          thinking (loading a request) so you can see it working, then settles back.
+          pointer-events-none → it never blocks anything underneath. */}
+      <motion.div
+        className="pointer-events-none absolute inset-0 flex items-center justify-center"
+        style={{ zIndex: isaac === "thinking" ? 40 : 0 }}
+        animate={{ scale: isaac === "thinking" ? 1.5 : 1 }}
+        transition={{ type: "spring", stiffness: 110, damping: 18 }}
+      >
         <IsaacOrb size={240} />
-      </div>
+      </motion.div>
 
       {/* Foreground column spans the full width, edge to edge */}
       <div className="relative z-10 flex h-full flex-col">
