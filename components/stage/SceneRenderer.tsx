@@ -17,7 +17,7 @@ export function SceneRenderer() {
     : "empty";
 
   return (
-    <div className="flex w-full max-w-[100rem] items-center justify-center">
+    <div className="flex w-full items-start justify-center">
       <AnimatePresence mode="wait">
         {experience && (
           <motion.div

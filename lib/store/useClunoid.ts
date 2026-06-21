@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { SpeechPlayer } from "@/lib/voice/speech";
 import { getSupabaseBrowser } from "@/lib/supabase/client";
 import type { Scene, Experience, ExplainerExperience, CalculationExperience } from "@/lib/brain/scene";
@@ -140,7 +141,9 @@ function textIsEcho(text: string, corpus: string): boolean {
   return corpus.includes(t) && (wc >= 2 || t.length >= 10);
 }
 
-export const useClunoid = create<ClunoidStore>((set, get) => {
+export const useClunoid = create<ClunoidStore>()(
+  persist(
+    (set, get) => {
   function stopPlayback() {
     playSeq++; // invalidate any in-flight explainer/speech loop
     getPlayer(set).stop();
@@ -158,6 +161,16 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
   // Teach a calculation step-by-step — each step's card reveals as Isaac says it
   // (same synced-playback model as the explainer; explainerIndex = current step).
   async function playCalculationFrom(calc: CalculationExperience, start: number, seq: number) {
+    // A brief intro (what this is + what we're finding) plays first, with no step
+    // card highlighted yet (index -1 → just the context/media on the left show).
+    if (start < 0) {
+      if (calc.intro) {
+        set({ caption: calc.intro, spokenChars: 0, explainerIndex: -1, isaac: "speaking" });
+        await getPlayer(set).play(calc.intro, (c) => set({ spokenChars: c }));
+        if (seq !== playSeq) return;
+      }
+      start = 0;
+    }
     for (let i = Math.max(0, start); i < calc.steps.length; i++) {
       if (seq !== playSeq) return; // superseded / interrupted
       set({ caption: calc.steps[i].say, spokenChars: 0, explainerIndex: i, isaac: "speaking" });
@@ -174,10 +187,10 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
       caption: newExplainer
         ? newExplainer.beats[0]?.say ?? scene.say
         : newCalc
-        ? newCalc.steps[0]?.say ?? scene.say
+        ? newCalc.intro ?? newCalc.steps[0]?.say ?? scene.say
         : scene.say,
       spokenChars: 0,
-      explainerIndex: scene.keep ? s.explainerIndex : 0,
+      explainerIndex: scene.keep ? s.explainerIndex : newCalc?.intro ? -1 : 0,
       guessFeedback: null,
       // Replace the Stage with the new experience, UNLESS it's a short interactive
       // reply (keep) — then leave the current content on screen.
@@ -200,7 +213,7 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
     if (newExplainer) {
       await playExplainerFrom(newExplainer, 0, seq);
     } else if (newCalc) {
-      await playCalculationFrom(newCalc, 0, seq);
+      await playCalculationFrom(newCalc, newCalc.intro ? -1 : 0, seq);
     } else {
       // A short interactive reply (acknowledgement / question).
       await getPlayer(set).play(scene.say, (chars) => set({ spokenChars: chars }));
@@ -362,4 +375,23 @@ export const useClunoid = create<ClunoidStore>((set, get) => {
 
     isEcho: (text) => textIsEcho(text, isaacCorpus(get())),
   };
-});
+    },
+    {
+      // Remember where we were so a refresh never sends the user back to the
+      // start — the experience, progress (current step/beat), and conversation
+      // are restored. Transient playback state (isaac/amplitude/mic) is NOT
+      // persisted, so Isaac resumes idle and the user simply carries on.
+      name: "clunoid-session",
+      version: 1,
+      partialize: (s) => ({
+        experience: s.experience,
+        explainerIndex: s.explainerIndex,
+        history: s.history,
+        started: s.started,
+        expectsInput: s.expectsInput,
+        caption: s.caption,
+        spokenChars: s.spokenChars,
+      }),
+    }
+  )
+);

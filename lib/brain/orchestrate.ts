@@ -417,6 +417,11 @@ const calcGenSchema = z.object({
       "Short badge label for the TYPE of calculation, e.g. 'Algebra', 'Vectors', 'Newton's 2nd Law', 'Stoichiometry', 'Compound Interest', 'Probability'."
     ),
   title: z.string().describe("A clean, plain restatement of the problem (no LaTeX wrappers)."),
+  intro: z
+    .string()
+    .describe(
+      "ONE brief sentence said BEFORE teaching: what kind of calculation this is and what we're finding. Keep it short and warm."
+    ),
   steps: z
     .array(
       z.object({
@@ -428,8 +433,12 @@ const calcGenSchema = z.object({
     )
     .min(2)
     .max(12)
-    .describe("EVERY step needed to reach the answer, in order, skipping NOTHING."),
-  finalAnswer: z.string().describe("The final answer, clearly stated (with units if any)."),
+    .describe("EVERY step needed to reach the answer, in order, skipping NOTHING. Make the LAST step VERIFY the answer."),
+  finalAnswer: z
+    .string()
+    .describe(
+      "ONLY the brief final result with units and nothing else — e.g. 'H = 25 m' or 'x = 35'. No working, no explanation, no conditions, no symbolic-vs-numeric caveats."
+    ),
   context: z.object({
     summary: z.string().describe("1-2 sentences: what type of calculation this is and the core idea/method."),
     formula: z.string().optional().describe("The key formula used, as a LaTeX expression, if applicable."),
@@ -448,22 +457,86 @@ const calcGenSchema = z.object({
     ),
 });
 
-async function buildCalculation(problem: string, ctx: BrainContext): Promise<Scene> {
-  const model = hasAnthropic() ? MODELS.smart() : MODELS.fast();
-  let object: z.infer<typeof calcGenSchema>;
+function calcSystem(ctx: BrainContext): string {
+  return `${ISAAC_PERSONA}${dateLine(
+    ctx
+  )}\nYou are solving a CALCULATION (math, physics, chemistry, biology, finance, statistics — any quantitative field). ACCURACY IS ABSOLUTE — a wrong answer is unacceptable:
+- Use the EXACT values GIVEN in the problem. NEVER assume or substitute a default (e.g. if a radius of 10 m is given, use 10 — never 1). Read every number carefully.
+- Work the complete solution, then VERIFY it by substituting your answer back into EVERY condition in the problem and re-checking the arithmetic. Only finalise once it genuinely checks out.
+- Do not invent missing numbers; if something is truly ambiguous, state the assumption.
+Then teach it step by step, skipping NO step, so a learner follows every single move from start to answer. For EACH step: a short title, the spoken explanation ("say"), the written explanation ("text"), and the math as LaTeX where it applies. Make the LAST step a quick verification (plug the answer back). Also give a brief "intro" (what this is and what we're finding), the context (type, key formula, verified facts, tips), 1-4 media phrases, and a BRIEF finalAnswer (just the result + units).`;
+}
+
+async function solveCalc(
+  problem: string,
+  ctx: BrainContext,
+  hint?: string
+): Promise<z.infer<typeof calcGenSchema> | null> {
+  const system = calcSystem(ctx) + (hint ? `\n\nIMPORTANT: ${hint}` : "");
+  const strong = hasAnthropic() ? MODELS.genius() : MODELS.fast();
+  const backup = hasAnthropic() ? MODELS.smart() : MODELS.fast();
+  for (const model of [strong, backup]) {
+    try {
+      const { object } = await generateObject({
+        model,
+        schema: calcGenSchema,
+        system,
+        prompt: problem,
+        temperature: 0.1,
+        maxRetries: 1,
+      });
+      return object;
+    } catch {
+      /* try the backup model next */
+    }
+  }
+  return null;
+}
+
+// An independent, terse re-solve used only to cross-check the final answer.
+async function verifyCalc(problem: string, ctx: BrainContext): Promise<string | null> {
   try {
-    ({ object } = await generateObject({
-      model,
-      schema: calcGenSchema,
-      system: `${ISAAC_PERSONA}${dateLine(
+    const { text } = await generateText({
+      model: hasAnthropic() ? MODELS.genius() : MODELS.fast(),
+      system: `${dateLine(
         ctx
-      )}\nThe user has a CALCULATION to solve — it may be math, physics, chemistry, biology, finance, statistics, or any quantitative field. SOLVE IT CORRECTLY and VERIFY the answer before finalising — accuracy is non-negotiable, never guess. Then teach it step by step, skipping NO step, so a learner can follow every single move from start to answer. For EACH step give: a short title, the spoken explanation ("say"), the written explanation ("text"), and the math as LaTeX where it applies. Also give context (what type of calculation it is, the key formula, verified facts about the method and where/who it comes from, and useful tips) and 1-4 media search phrases for related visuals. Be dynamic — use as many steps, facts and tips as the problem genuinely needs.`,
-      prompt: problem,
-      temperature: 0.2,
+      )}\nSolve this problem yourself, carefully, using the EXACT values given (never assume defaults). Double-check the arithmetic. Reply with ONLY the final answer — the value and its units, nothing else.`,
+      messages: [{ role: "user", content: problem }],
+      temperature: 0,
+      maxTokens: 80,
       maxRetries: 1,
-    }));
+    });
+    return text.trim() || null;
   } catch {
-    return { say: "Let me try that again — could you restate the problem for me?", expectsInput: "voice" };
+    return null;
+  }
+}
+
+// Loose agreement: do the two answers share their key number (within 1%)?
+function answersAgree(a: string, b: string): boolean {
+  const nums = (s: string) => (s.match(/-?\d+(?:\.\d+)?/g) || []).map(Number).filter((n) => Number.isFinite(n));
+  const na = nums(a);
+  const nb = nums(b);
+  if (!na.length || !nb.length) return a.trim().toLowerCase() === b.trim().toLowerCase();
+  const close = (x: number, y: number) => Math.abs(x - y) <= Math.max(1e-6, Math.abs(y) * 0.01);
+  return na.some((x) => nb.some((y) => close(x, y)));
+}
+
+async function buildCalculation(problem: string, ctx: BrainContext): Promise<Scene> {
+  // Solve and independently cross-check IN PARALLEL (both strong) — accuracy
+  // without doubling the wait.
+  const [solved, check] = await Promise.all([solveCalc(problem, ctx), verifyCalc(problem, ctx)]);
+  let object = solved;
+  if (!object) return { say: "Let me try that again — could you restate the problem for me?", expectsInput: "voice" };
+
+  // Reconcile on disagreement with a careful re-solve that sees both answers.
+  if (check && !answersAgree(object.finalAnswer, check)) {
+    const corrected = await solveCalc(
+      problem,
+      ctx,
+      `A first attempt gave "${object.finalAnswer}" but a careful independent re-check gave "${check}" — these DISAGREE. Re-solve with extreme care using the EXACT given values and arithmetic, and make sure the final answer is correct and consistent with every step.`
+    );
+    if (corrected) object = corrected;
   }
 
   // Resolve related media (left side) in parallel — real images/clips only.
@@ -479,12 +552,13 @@ async function buildCalculation(problem: string, ctx: BrainContext): Promise<Sce
   ).filter((m): m is CalcMedia => m !== null);
 
   return {
-    say: object.title, // history/label; the steps are what's actually spoken
+    say: object.title, // history/label; the intro + steps are what's actually spoken
     expectsInput: "voice",
     experience: {
       type: "calculation",
       kind: object.kind,
       title: object.title,
+      intro: object.intro,
       steps: object.steps,
       finalAnswer: object.finalAnswer,
       context: object.context,

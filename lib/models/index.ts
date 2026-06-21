@@ -12,8 +12,10 @@ export const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY
 export const MODELS = {
   /** Free, very fast, high rate limits: routing, chat, quick replies. */
   fast: () => groq("llama-3.1-8b-instant"),
-  /** Cheap + accurate Claude: math, fact-grounding, structured explanations. */
+  /** Cheap + accurate Claude: fact-grounding, structured explanations. */
   smart: () => anthropic("claude-haiku-4-5-20251001"),
+  /** Strongest reasoning — used where the answer MUST be correct (calculations). */
+  genius: () => anthropic("claude-sonnet-4-6"),
 } as const;
 
 export const hasGroq = () => !!process.env.GROQ_API_KEY;

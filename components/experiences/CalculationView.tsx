@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, Calculator, Sparkles, Lightbulb } from "lucide-react";
+import { ChevronDown, Sparkles, Lightbulb } from "lucide-react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { useClunoid } from "@/lib/store/useClunoid";
@@ -45,21 +45,12 @@ export function CalculationView({ data }: { data: CalculationExperience }) {
   }, [data.media]);
 
   return (
-    <div className="flex w-full max-w-6xl flex-col gap-5">
-      {/* Badge */}
-      <div className="flex justify-center">
-        <div className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-clay to-spark px-4 py-1.5 text-[#1F1E1C] shadow-glow">
-          <Calculator size={15} />
-          <span className="text-[11px] font-medium uppercase tracking-wide opacity-80">Calculation</span>
-          <span className="text-sm font-semibold">· {data.kind}</span>
-        </div>
-      </div>
-
+    <div className="flex w-full flex-col gap-5">
       {data.title && <h2 className="text-center font-serif text-xl text-ink sm:text-2xl">{data.title}</h2>}
 
-      <div className="flex w-full flex-col gap-6 lg:flex-row lg:items-start lg:gap-8">
+      <div className="flex w-full flex-col gap-6 lg:flex-row lg:items-start lg:gap-10">
         {/* LEFT — related media + facts / context / tips */}
-        <div className="flex w-full shrink-0 flex-col gap-4 lg:sticky lg:top-2 lg:w-[40%]">
+        <div className="flex w-full shrink-0 flex-col gap-4 lg:sticky lg:top-2 lg:w-[42%]">
           {data.media.length > 0 && <MediaStack media={data.media} />}
           {data.context && <ContextCard context={data.context} />}
         </div>
@@ -190,20 +181,44 @@ function ContextCard({ context }: { context: NonNullable<CalculationExperience["
 
 function MediaStack({ media }: { media: CalcMedia[] }) {
   const [sel, setSel] = useState(0);
+  const [manual, setManual] = useState(false);
   const active = media[sel] ?? media[0];
+
+  // Auto-scroll through the media (full size) until the user picks one.
+  useEffect(() => {
+    if (manual || media.length < 2) return;
+    const t = setInterval(() => setSel((i) => (i + 1) % media.length), 4500);
+    return () => clearInterval(t);
+  }, [manual, media.length]);
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="overflow-hidden rounded-2xl border border-clay/40 bg-surface/60 shadow-glow">
-        <MediaEl media={active} className="max-h-[40vh] w-full object-contain" big />
-      </div>
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={sel}
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.98 }}
+          transition={{ duration: 0.4 }}
+          className="grid place-items-center overflow-hidden rounded-2xl border border-clay/40 bg-surface/60 shadow-glow"
+        >
+          <MediaEl media={active} className="max-h-[58vh] w-full object-contain" big />
+        </motion.div>
+      </AnimatePresence>
       {media.length > 1 && (
         <div className="flex flex-wrap gap-2">
           {media.map((m, i) => (
             <button
               key={i}
               type="button"
-              onClick={() => setSel(i)}
-              className={cn("overflow-hidden rounded-lg border", i === sel ? "border-clay" : "border-border")}
+              onClick={() => {
+                setSel(i);
+                setManual(true);
+              }}
+              className={cn(
+                "overflow-hidden rounded-lg border transition",
+                i === sel ? "border-clay ring-1 ring-clay/40" : "border-border opacity-70 hover:opacity-100"
+              )}
             >
               <MediaEl media={m} className="h-12 w-16 object-cover" />
             </button>

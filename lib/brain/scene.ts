@@ -98,6 +98,8 @@ export const calculationSchema = z.object({
   kind: z.string(),
   /** A clean restatement of the problem. */
   title: z.string().optional(),
+  /** A brief spoken intro (what this is + what we're finding) said before step 1. */
+  intro: z.string().optional(),
   steps: z.array(calcStepSchema).min(1),
   finalAnswer: z.string().optional(),
   /** Left-side facts / context / tips card. */

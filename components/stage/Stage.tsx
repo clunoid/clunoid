@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Mic, MicOff, Send } from "lucide-react";
+import { Mic, MicOff, Send, Calculator } from "lucide-react";
 import { useClunoid } from "@/lib/store/useClunoid";
 import { useSpeechInput } from "@/lib/voice/useSpeechInput";
 import { useMicLevel } from "@/lib/voice/useMicLevel";
@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 export function Stage() {
   const isaac = useClunoid((s) => s.isaac);
   const started = useClunoid((s) => s.started);
+  const experience = useClunoid((s) => s.experience);
   const isAuthed = useClunoid((s) => s.user.isAuthed);
   const createdAt = useClunoid((s) => s.user.createdAt);
   const { greet, send, submitGuess, setUser, setMicLevel, announceAuth } = useClunoid.getState();
@@ -224,17 +225,17 @@ export function Stage() {
           <IsaacOrb size={170} />
           <h1 className="mt-8 font-serif text-5xl text-ink">Clunoid</h1>
           <p className="mt-3 text-ink-muted">
-            Meet Isaac — a super-intelligent companion who can show you anything,
-            play with you, and think out loud, just by talking.
+            Meet Isaac — a super-intelligent companion who can show you anything
+            and figure out anything you&apos;re curious about.
           </p>
           <button
             onClick={meetIsaac}
             className="mt-8 rounded-full bg-clay px-8 py-4 text-lg font-medium text-[#1F1E1C] shadow-glow transition hover:bg-clay-soft"
           >
-            Meet Isaac
+            Start exploring
           </button>
           <p className="mt-4 text-xs text-ink-faint">
-            Tap the mic to talk — Clunoid listens until you&apos;re done, then prepares.
+            Ask Isaac anything — the harder the question, the better.
           </p>
         </div>
       </main>
@@ -258,13 +259,22 @@ export function Stage() {
 
       {/* Foreground column spans the full width, edge to edge */}
       <div className="relative z-10 flex h-full flex-col">
-        <div className="flex shrink-0 items-center justify-between px-5 py-4">
+        <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-4">
           <span className="font-serif text-lg text-ink/80">clunoid</span>
+          {experience?.type === "calculation" && (
+            <div className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-clay to-spark px-3 py-1 text-[#1F1E1C] shadow-glow">
+              <Calculator size={14} />
+              <span className="hidden text-[11px] font-medium uppercase tracking-wide opacity-80 sm:inline">
+                Calculation
+              </span>
+              <span className="text-xs font-semibold">{experience.kind}</span>
+            </div>
+          )}
           <ProfileMenu />
         </div>
 
-        {/* Content (cards / steps / flags) — full width & height, scrolls if tall, over the orb */}
-        <div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto px-4 py-6 sm:px-8">
+        {/* Content (cards / steps / flags) — full width, edge to edge, scrolls if tall, over the orb */}
+        <div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto px-3 py-6 sm:px-6">
           <SceneRenderer />
         </div>
 

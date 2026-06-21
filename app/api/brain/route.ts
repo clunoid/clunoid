@@ -4,7 +4,7 @@ import { getSupabaseServer } from "@/lib/supabase/server";
 import type { BrainRequest, BrainContext } from "@/lib/brain/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   let body: BrainRequest;
