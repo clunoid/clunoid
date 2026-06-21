@@ -31,6 +31,14 @@ export function Stage() {
   const silenceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const taRef = useRef<HTMLTextAreaElement | null>(null); // the auto-growing input
 
+  // Restore any saved session (experience, progress, history) EXACTLY ONCE on
+  // mount, and before the auto-greet runs. With skipHydration this is the only
+  // place rehydration happens, so a late async rehydration can never clobber a
+  // live scene mid-playback (the cause of cards/media not showing until refresh).
+  useEffect(() => {
+    void useClunoid.persist.rehydrate();
+  }, []);
+
   // Restore the session on load and keep it in sync (handles OAuth return,
   // sign-out, refresh — Supabase persists the session in the browser).
   useEffect(() => {
