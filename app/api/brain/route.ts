@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { orchestrate } from "@/lib/brain/orchestrate";
 import { getSupabaseServer } from "@/lib/supabase/server";
+import { publishArticle } from "@/lib/articles";
 import type { BrainRequest, BrainContext } from "@/lib/brain/types";
 
 export const runtime = "nodejs";
@@ -63,6 +64,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const scene = await orchestrate(body, ctx);
+    // Publish/refresh the public, SEO-indexed article AFTER the response is sent
+    // (never adds latency). Only topic-based, personal-data-free results qualify.
+    if (scene.experience) {
+      const exp = scene.experience;
+      after(() => publishArticle(exp, body.text || ""));
+    }
     return NextResponse.json(scene);
   } catch (err) {
     console.error("brain error:", err);

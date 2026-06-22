@@ -117,6 +117,19 @@ export function Stage() {
     else void greet();
   }, [authChecked, isAuthed, started, createdAt, greet, announceAuth]);
 
+  // Arriving from an article's "Ask Isaac" link (/?q=…) → ask it once, then
+  // clean the URL so a refresh doesn't re-ask.
+  const qHandled = useRef(false);
+  useEffect(() => {
+    if (qHandled.current) return;
+    const q = new URLSearchParams(window.location.search).get("q");
+    if (!q || !q.trim()) return;
+    qHandled.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    useClunoid.setState({ started: true });
+    void useClunoid.getState().send(q.trim().slice(0, 500));
+  }, []);
+
   function handleInput(text: string) {
     setInterim("");
     const inFlagGame = useClunoid.getState().experience?.type === "flag_quiz";
