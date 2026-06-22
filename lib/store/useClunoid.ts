@@ -151,22 +151,26 @@ export const useClunoid = create<ClunoidStore>()(
 
   // Narrate an explainer beat-by-beat from `start` (visuals sync to each beat).
   async function playExplainerFrom(exp: ExplainerExperience, start: number, seq: number) {
+    const player = getPlayer(set);
     for (let i = Math.max(0, start); i < exp.beats.length; i++) {
       if (seq !== playSeq) return; // superseded / interrupted
       set({ caption: exp.beats[i].say, spokenChars: 0, explainerIndex: i, isaac: "speaking" });
-      await getPlayer(set).play(exp.beats[i].say, (c) => set({ spokenChars: c }));
+      if (i + 1 < exp.beats.length) player.prefetch(exp.beats[i + 1].say); // pipeline → no gap between beats
+      await player.play(exp.beats[i].say, (c) => set({ spokenChars: c }));
     }
   }
 
   // Teach a calculation step-by-step — each step's card reveals as Isaac says it
   // (same synced-playback model as the explainer; explainerIndex = current step).
   async function playCalculationFrom(calc: CalculationExperience, start: number, seq: number) {
+    const player = getPlayer(set);
     // A brief intro (what this is + what we're finding) plays first, with no step
     // card highlighted yet (index -1 → just the context/media on the left show).
     if (start < 0) {
       if (calc.intro) {
         set({ caption: calc.intro, spokenChars: 0, explainerIndex: -1, isaac: "speaking" });
-        await getPlayer(set).play(calc.intro, (c) => set({ spokenChars: c }));
+        if (calc.steps[0]) player.prefetch(calc.steps[0].say);
+        await player.play(calc.intro, (c) => set({ spokenChars: c }));
         if (seq !== playSeq) return;
       }
       start = 0;
@@ -174,7 +178,8 @@ export const useClunoid = create<ClunoidStore>()(
     for (let i = Math.max(0, start); i < calc.steps.length; i++) {
       if (seq !== playSeq) return; // superseded / interrupted
       set({ caption: calc.steps[i].say, spokenChars: 0, explainerIndex: i, isaac: "speaking" });
-      await getPlayer(set).play(calc.steps[i].say, (c) => set({ spokenChars: c }));
+      if (i + 1 < calc.steps.length) player.prefetch(calc.steps[i + 1].say); // pipeline → no gap between steps
+      await player.play(calc.steps[i].say, (c) => set({ spokenChars: c }));
     }
   }
 
