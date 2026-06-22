@@ -9,9 +9,9 @@ export const hasPexels = hasKey;
 
 type VideoFile = { link?: string; width?: number; file_type?: string };
 type PexelsVideo = { image?: string; video_files?: VideoFile[] };
-type PexelsPhoto = { src?: { large2x?: string; large?: string } };
+type PexelsPhoto = { src?: { original?: string; large2x?: string; large?: string } };
 
-/** Top photo URLs for a query (large size). */
+/** Top photo URLs for a query (full resolution). */
 export async function pexelsPhotos(query: string, n = 4): Promise<string[]> {
   const key = process.env.PEXELS_API_KEY;
   if (!key || !query.trim()) return [];
@@ -22,7 +22,9 @@ export async function pexelsPhotos(query: string, n = 4): Promise<string[]> {
     );
     if (!res.ok) return [];
     const d = (await res.json()) as { photos?: PexelsPhoto[] };
-    return (d.photos ?? []).map((p) => p.src?.large2x || p.src?.large).filter((u): u is string => !!u);
+    return (d.photos ?? [])
+      .map((p) => p.src?.original || p.src?.large2x || p.src?.large)
+      .filter((u): u is string => !!u);
   } catch {
     return [];
   }
@@ -44,8 +46,8 @@ export async function pexelsVideos(query: string, n = 4): Promise<{ url: string;
       const mp4s = (v.video_files ?? [])
         .filter((f) => f.file_type === "video/mp4" && f.link)
         .sort((a, b) => (a.width ?? 0) - (b.width ?? 0));
-      // Prefer ~720p–1080p for quality without huge files.
-      const pick = mp4s.find((f) => (f.width ?? 0) >= 900 && (f.width ?? 0) <= 1400) ?? mp4s[mp4s.length - 1];
+      // Full resolution — the highest-quality MP4 Pexels offers for this clip.
+      const pick = mp4s[mp4s.length - 1];
       if (pick?.link) out.push({ url: pick.link, poster: v.image });
     }
     return out;

@@ -12,27 +12,6 @@ export type WikiResult = {
 
 const UA = "Clunoid/1.0 (https://github.com/clunoid/clunoid)";
 
-/**
- * Cap a Wikimedia image to a sensible display width (default 1280px) so we never
- * download multi-MB originals (3840px+) — much faster to load, no visible quality
- * loss at our display sizes. Handles both existing thumbnails and raw originals;
- * leaves non-Wikimedia and SVG URLs untouched.
- */
-export function shrinkWikimedia(url: string | undefined, width = 1280): string | undefined {
-  if (!url || !url.includes("upload.wikimedia.org") || /\.svg$/i.test(url)) return url;
-  const thumb = url.match(/\/(\d+)px-([^/]+)$/);
-  if (thumb) {
-    return Number(thumb[1]) > width ? url.replace(/\/\d+px-([^/]+)$/, `/${width}px-$1`) : url;
-  }
-  // A full original (…/wikipedia/<proj>/a/ab/Name.jpg) → width-capped thumbnail.
-  const parts = url.split("/");
-  const file = parts[parts.length - 1];
-  const proj = parts.findIndex((p) => p === "commons" || p === "en");
-  if (proj === -1 || !file) return url;
-  parts.splice(proj + 1, 0, "thumb");
-  return `${parts.join("/")}/${width}px-${file}`;
-}
-
 async function summary(title: string): Promise<WikiResult | null> {
   try {
     const res = await fetch(
@@ -52,7 +31,7 @@ async function summary(title: string): Promise<WikiResult | null> {
     return {
       title: d.title ?? title,
       extract: d.extract,
-      imageUrl: shrinkWikimedia(d.originalimage?.source ?? d.thumbnail?.source),
+      imageUrl: d.originalimage?.source ?? d.thumbnail?.source,
       url: d.content_urls?.desktop?.page,
     };
   } catch {
