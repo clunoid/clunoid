@@ -4,8 +4,6 @@
  * can't. Free tier ~1000 searches/month; gated on TAVILY_API_KEY so the app
  * still runs without it (falling back to Wikipedia/Wikidata).
  */
-import { shrinkWikimedia } from "./wikipedia";
-
 export type WebSearch = {
   answer?: string;
   results: { title: string; url: string; content: string }[];
@@ -40,7 +38,7 @@ export async function imageSearch(query: string): Promise<string | null> {
     const d = (await res.json()) as { images?: (string | { url?: string })[] };
     for (const it of d.images ?? []) {
       const u = typeof it === "string" ? it : it?.url;
-      if (u && !BLOCKED_IMG.test(u)) return shrinkWikimedia(u) ?? u; // first hotlink-safe image (size-capped)
+      if (u && !BLOCKED_IMG.test(u)) return u; // first hotlink-safe image (full resolution)
     }
     return null;
   } catch {

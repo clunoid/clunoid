@@ -57,7 +57,16 @@ export class SpeechPlayer {
     }
     const payload = await pending;
     this.cache.delete(key); // one-shot: consume it
-    if (!payload?.audio) return; // no key / no audio — caption still shows
+    if (!payload?.audio) {
+      // No voice (e.g. ElevenLabs key absent) — DON'T flash straight to the end.
+      // Reveal the line and hold it for a readable beat so explainers/calculations
+      // still pace normally and every card/visual is seen. Fully time-based.
+      this.onProgress?.(text.length, text.length);
+      return new Promise<void>((resolve) => {
+        const ms = Math.min(9000, Math.max(1800, text.trim().length * 45));
+        setTimeout(resolve, ms);
+      });
+    }
 
     this.times = payload.times ?? null;
     this.ptr = 0;

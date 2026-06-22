@@ -2,12 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, Sparkles, Lightbulb } from "lucide-react";
+import { ChevronDown, Sparkles, Lightbulb, Download } from "lucide-react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { useClunoid } from "@/lib/store/useClunoid";
 import type { CalculationExperience, CalcMedia } from "@/lib/brain/scene";
-import { cn } from "@/lib/utils";
+import { cn, downloadMedia } from "@/lib/utils";
 
 function Tex({ expr, display = true }: { expr: string; display?: boolean }) {
   const html = useMemo(() => {
@@ -227,9 +227,20 @@ function MediaStack({ media }: { media: CalcMedia[] }) {
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.98 }}
           transition={{ duration: 0.4 }}
-          className="grid place-items-center overflow-hidden rounded-2xl border border-clay/40 bg-surface/60 shadow-glow"
+          className="group relative grid place-items-center overflow-hidden rounded-2xl border border-clay/40 bg-surface/60 shadow-glow"
         >
           <MediaEl media={active} className="max-h-[58vh] w-full object-contain" big />
+          {(active?.videoUrl || active?.imageUrl) && (
+            <button
+              type="button"
+              onClick={() => downloadMedia((active.videoUrl || active.imageUrl) as string)}
+              title="Download"
+              aria-label="Download media"
+              className="absolute right-2 top-2 grid h-9 w-9 place-items-center rounded-full bg-black/45 text-white opacity-0 backdrop-blur transition hover:bg-black/70 group-hover:opacity-100"
+            >
+              <Download size={16} />
+            </button>
+          )}
         </motion.div>
       </AnimatePresence>
       {media.length > 1 && (

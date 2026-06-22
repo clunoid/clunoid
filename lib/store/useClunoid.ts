@@ -66,6 +66,10 @@ function nextFlagExperience(avoidCode: string | undefined, round: number, score:
   };
 }
 
+/** A saved past request — its title + the full experience, so it can be reopened
+ * exactly as it appeared (cards, media, calculations). */
+export type HistoryEntry = { id: string; title: string; experience: Experience; createdAt: string };
+
 type ClunoidStore = {
   isaac: IsaacState;
   caption: string;
@@ -82,6 +86,9 @@ type ClunoidStore = {
   authMode: "signup" | "login";
   profileOpen: boolean;
   guessFeedback: GuessFeedback | null; // flag reveal: what you said + right/wrong + answer
+  historyLog: HistoryEntry[]; // past requests, most-recent first
+  historyOpen: boolean; // the full-screen history panel
+  pendingRequest: string | null; // a request typed before signing in, replayed after
 
   setUser: (u: UserState) => void;
   setMicLevel: (v: number) => void;
@@ -92,6 +99,11 @@ type ClunoidStore = {
   signOut: () => Promise<void>;
   /** Tell the brain an account state just changed, so Isaac responds in real time. */
   announceAuth: (event: "signed_up" | "signed_in" | "signed_out") => Promise<void>;
+
+  openHistory: () => void;
+  closeHistory: () => void;
+  restoreHistory: (id: string) => void; // reopen a past request exactly as it was
+  deleteHistory: (id: string) => void;
 
   greet: () => Promise<void>;
   send: (text: string) => Promise<void>;
@@ -209,6 +221,22 @@ export const useClunoid = create<ClunoidStore>()(
       profileOpen: scene.showProfile ? true : s.profileOpen,
     }));
 
+    // Save substantive results (explainers, calculations, info cards) to history
+    // so the user can reopen them later exactly as they appeared.
+    if (!scene.keep && (exp?.type === "explainer" || exp?.type === "calculation" || exp?.type === "rich_card")) {
+      const title = ((exp as { title?: string }).title || scene.say || "Untitled").trim();
+      set((s) => {
+        if (s.historyLog[0]?.title === title) return s; // skip immediate duplicate
+        const entry: HistoryEntry = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          title,
+          experience: exp,
+          createdAt: new Date().toISOString(),
+        };
+        return { historyLog: [entry, ...s.historyLog].slice(0, 60) };
+      });
+    }
+
     // Auto-close the profile a few seconds after Isaac opens it, so it never
     // lingers over the cards/media.
     if (scene.showProfile) {
@@ -247,6 +275,9 @@ export const useClunoid = create<ClunoidStore>()(
         user: get().user,
         client: clientCtx(),
       });
+      // If the brain asks them to sign in, remember what they asked so it's
+      // re-sent after auth (never lost the way some apps drop a typed prompt).
+      if (scene.auth && userTurn) set({ pendingRequest: userTurn });
       await applyScene(scene);
     } catch {
       await applyScene({ say: "Say that once more for me?", expectsInput: "voice" });
@@ -269,6 +300,9 @@ export const useClunoid = create<ClunoidStore>()(
     authMode: "signup",
     profileOpen: false,
     guessFeedback: null,
+    historyLog: [],
+    historyOpen: false,
+    pendingRequest: null,
 
     setUser: (u) => set({ user: u }),
     setMicLevel: (v) => set({ micLevel: v }),
@@ -302,7 +336,40 @@ export const useClunoid = create<ClunoidStore>()(
       // must never linger open across an account change.
       set({ started: true, profileOpen: false });
       await run({ kind: "auth_event", event });
+      // Replay a request they typed before signing in (welcome first, then answer it).
+      const pending = get().pendingRequest;
+      if (pending) {
+        set({ pendingRequest: null });
+        await get().send(pending);
+      }
     },
+
+    openHistory: () => set({ historyOpen: true }),
+    closeHistory: () => set({ historyOpen: false }),
+    restoreHistory: (id) => {
+      const entry = get().historyLog.find((h) => h.id === id);
+      if (!entry) return;
+      stopPlayback();
+      const exp = entry.experience;
+      // Reopen fully revealed (all beats/steps shown) — no re-voicing needed.
+      const idx =
+        exp.type === "explainer"
+          ? exp.beats.length - 1
+          : exp.type === "calculation"
+          ? exp.steps.length - 1
+          : 0;
+      set({
+        experience: exp,
+        explainerIndex: idx,
+        isaac: "idle",
+        amplitude: 0,
+        started: true,
+        historyOpen: false,
+        caption: "",
+        guessFeedback: null,
+      });
+    },
+    deleteHistory: (id) => set((s) => ({ historyLog: s.historyLog.filter((h) => h.id !== id) })),
 
     greet: async () => {
       if (get().started) return;
@@ -400,6 +467,7 @@ export const useClunoid = create<ClunoidStore>()(
         expectsInput: s.expectsInput,
         caption: s.caption,
         spokenChars: s.spokenChars,
+        historyLog: s.historyLog,
       }),
     }
   )

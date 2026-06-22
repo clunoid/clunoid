@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Mic, MicOff, Send, Calculator, Loader2 } from "lucide-react";
+import { Mic, MicOff, Send, Calculator, Loader2, History } from "lucide-react";
 import { useClunoid } from "@/lib/store/useClunoid";
 import { useSpeechInput } from "@/lib/voice/useSpeechInput";
 import { useMicLevel } from "@/lib/voice/useMicLevel";
@@ -11,6 +11,7 @@ import { getSupabaseBrowser } from "@/lib/supabase/client";
 import { IsaacOrb } from "./IsaacOrb";
 import { SceneRenderer } from "./SceneRenderer";
 import { Caption } from "./Caption";
+import { HistoryPanel } from "./HistoryPanel";
 import { AuthPrompt } from "@/components/auth/AuthPrompt";
 import { ProfileMenu } from "@/components/auth/ProfileMenu";
 import { cn } from "@/lib/utils";
@@ -336,21 +337,34 @@ export function Stage() {
             );
           })()}
 
-          <textarea
-            ref={taRef}
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter sends; Shift+Enter makes a new line (paste keeps its lines).
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submitTyped();
-              }
-            }}
-            rows={1}
-            placeholder="Ask Isaac anything"
-            className="max-h-[40vh] min-h-[3rem] min-w-0 flex-1 resize-none rounded-3xl border border-border bg-surface/80 px-5 py-[0.8rem] text-ink outline-none backdrop-blur placeholder:text-ink-faint focus:border-clay sm:min-h-[3.5rem] sm:py-[0.95rem]"
-          />
+          <div className="relative flex min-w-0 flex-1 items-end">
+            {/* History — lives inside the input, opens the full-screen history */}
+            <button
+              type="button"
+              onClick={() => useClunoid.getState().openHistory()}
+              title="History"
+              aria-label="History"
+              className="absolute bottom-[0.6rem] left-2 z-10 flex h-8 items-center gap-1 rounded-full px-2 text-ink-faint transition hover:bg-surface-2 hover:text-clay sm:bottom-3"
+            >
+              <History size={17} />
+              <span className="hidden text-xs font-medium sm:inline">History</span>
+            </button>
+            <textarea
+              ref={taRef}
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter sends; Shift+Enter makes a new line (paste keeps its lines).
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submitTyped();
+                }
+              }}
+              rows={1}
+              placeholder="Ask Isaac anything"
+              className="max-h-[40vh] min-h-[3rem] w-full resize-none rounded-3xl border border-border bg-surface/80 py-[0.8rem] pl-12 pr-5 text-ink outline-none backdrop-blur placeholder:text-ink-faint focus:border-clay sm:min-h-[3.5rem] sm:py-[0.95rem] sm:pl-28"
+            />
+          </div>
 
           <button
             type="submit"
@@ -368,6 +382,7 @@ export function Stage() {
       </div>
 
       <AuthPrompt />
+      <HistoryPanel />
     </main>
   );
 }
