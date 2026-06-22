@@ -1,5 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import type { Experience } from "@/lib/brain/scene";
+import { articleFields, slugify, summarize } from "./article-utils";
+
+export { slugify, summarize };
 
 export type Article = {
   slug: string;
@@ -21,28 +24,6 @@ function publicClient() {
   return createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
     cookies: { getAll: () => [], setAll: () => {} },
   });
-}
-
-/** Turn a title into a clean, stable URL slug. */
-export function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "") // strip combining accents
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-}
-
-// Reject anything that looks like personal data — articles are public knowledge only.
-const PII = /\b[\w.+-]+@[\w-]+\.[\w.-]+\b|\b\+?\d[\d ()-]{7,}\d\b/;
-
-/** A short, plain-text summary of an experience for SEO meta + listings. */
-export function summarize(exp: Experience): string {
-  if (exp.type === "explainer") return exp.beats.map((b) => b.say).join(" ").slice(0, 320).trim();
-  if (exp.type === "calculation") return (exp.intro || exp.context?.summary || exp.title || "").slice(0, 320).trim();
-  if (exp.type === "rich_card") return (exp.body || exp.title || "").slice(0, 320).trim();
-  return "";
 }
 
 export async function getArticle(slug: string): Promise<Article | null> {
@@ -73,19 +54,14 @@ export async function listArticles(limit = 200): Promise<ArticleMeta[]> {
  * popular topics keep refreshing with Isaac's latest, most accurate research.
  */
 export async function publishArticle(exp: Experience, fallbackTitle: string): Promise<void> {
-  if (exp.type !== "explainer" && exp.type !== "calculation" && exp.type !== "rich_card") return;
-  const title = (("title" in exp && exp.title ? exp.title : fallbackTitle) || "").trim();
-  if (title.length < 2 || PII.test(title)) return;
-  const summary = summarize(exp);
-  if (PII.test(summary)) return;
-  const slug = slugify(title);
-  if (!slug) return;
+  const f = articleFields(exp, fallbackTitle);
+  if (!f) return;
   try {
     await publicClient().rpc("upsert_article", {
-      p_slug: slug,
-      p_title: title,
-      p_summary: summary,
-      p_kind: exp.type,
+      p_slug: f.slug,
+      p_title: f.title,
+      p_summary: f.summary,
+      p_kind: f.kind,
       p_experience: exp,
     });
   } catch {
