@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Source_Serif_4 } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 
 const sans = Inter({
@@ -16,9 +18,25 @@ const serif = Source_Serif_4({
 });
 
 export const metadata: Metadata = {
-  title: "Clunoid",
+  metadataBase: new URL("https://clunoid.com"),
+  title: { default: "Clunoid", template: "%s · Clunoid" },
   description:
-    "Clunoid — talk to Isaac, a super-intelligent AI that shows you anything.",
+    "Clunoid — talk to Isaac, a super-intelligent AI that shows you anything, solves any problem, and brings ideas to life with synced visuals.",
+  applicationName: "Clunoid",
+  keywords: ["Clunoid", "Isaac", "AI", "voice AI", "ask anything", "explainer", "calculator", "study"],
+  authors: [{ name: "Clunoid" }],
+  openGraph: {
+    type: "website",
+    url: "https://clunoid.com",
+    siteName: "Clunoid",
+    title: "Clunoid",
+    description: "Talk to Isaac — a super-intelligent AI that shows you anything.",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Clunoid",
+    description: "Talk to Isaac — a super-intelligent AI that shows you anything.",
+  },
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Clunoid" },
 };
 
@@ -38,7 +56,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${sans.variable} ${serif.variable}`}>
-      <body>{children}</body>
+      <body>
+        {children}
+        <Analytics />
+        <SpeedInsights />
+      </body>
     </html>
   );
 }

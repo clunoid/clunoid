@@ -1,11 +1,14 @@
 "use client";
 
 type Alignment = { chars: string[] | null; times: number[] | null };
+type TtsPayload = { audio: string } & Alignment;
 
 /**
  * Plays Isaac's speech (ElevenLabs base64 + character timestamps). Exposes:
  *  - live amplitude (0..1) for the orb,
  *  - synced progress (how many characters have been spoken) for caption highlight.
+ * Lines can be PREFETCHED so the next beat's audio is ready the instant the
+ * current one ends — no gap, no "lag" (critical over slow/remote networks).
  * Call stop() to interrupt instantly (barge-in).
  */
 export class SpeechPlayer {
@@ -17,29 +20,44 @@ export class SpeechPlayer {
   private onProgress?: (charIndex: number, total: number) => void;
   private times: number[] | null = null;
   private ptr = 0;
+  // In-flight / ready TTS fetches keyed by line, so play() can start instantly.
+  private cache = new Map<string, Promise<TtsPayload | null>>();
 
   constructor(onAmplitude?: (v: number) => void) {
     this.onAmplitude = onAmplitude;
   }
 
+  private fetchTts(text: string): Promise<TtsPayload | null> {
+    return fetch("/api/tts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    })
+      .then(async (res) => (!res.ok || res.status === 204 ? null : ((await res.json()) as TtsPayload)))
+      .catch(() => null);
+  }
+
+  /** Begin fetching a line's audio ahead of time (call for the NEXT beat). */
+  prefetch(text: string): void {
+    const key = text.trim();
+    if (!key || this.cache.has(key)) return;
+    this.cache.set(key, this.fetchTts(key));
+  }
+
   async play(text: string, onProgress?: (charIndex: number, total: number) => void): Promise<void> {
-    this.stop();
-    if (!text.trim()) return;
+    this.stopAudio();
+    const key = text.trim();
+    if (!key) return;
     this.onProgress = onProgress;
 
-    let payload: { audio: string } & Alignment;
-    try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (!res.ok || res.status === 204) return; // no key / no audio — caption still shows
-      payload = await res.json();
-    } catch {
-      return;
+    let pending = this.cache.get(key);
+    if (!pending) {
+      pending = this.fetchTts(key);
+      this.cache.set(key, pending);
     }
-    if (!payload?.audio) return;
+    const payload = await pending;
+    this.cache.delete(key); // one-shot: consume it
+    if (!payload?.audio) return; // no key / no audio — caption still shows
 
     this.times = payload.times ?? null;
     this.ptr = 0;
@@ -114,13 +132,20 @@ export class SpeechPlayer {
     this.analyser = null;
   }
 
-  stop() {
+  /** Stop the current audio but KEEP prefetched lines ready (used between beats). */
+  private stopAudio() {
     if (this.audio) {
       this.audio.pause();
       this.audio.onended = null;
       this.audio = null;
     }
     this.teardownAnalyser();
+  }
+
+  /** Full stop / barge-in: also drop any prefetched audio (it's now stale). */
+  stop() {
+    this.stopAudio();
+    this.cache.clear();
   }
 }
 
