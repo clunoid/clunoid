@@ -37,7 +37,11 @@ export function Stage() {
   // place rehydration happens, so a late async rehydration can never clobber a
   // live scene mid-playback (the cause of cards/media not showing until refresh).
   useEffect(() => {
-    void useClunoid.persist.rehydrate();
+    void (async () => {
+      await useClunoid.persist.rehydrate();
+      // Backfill the public article corpus from this device's past history (deduped).
+      useClunoid.getState().syncArticles();
+    })();
   }, []);
 
   // Restore the session on load and keep it in sync (handles OAuth return,
@@ -121,14 +125,23 @@ export function Stage() {
   // clean the URL so a refresh doesn't re-ask.
   const qHandled = useRef(false);
   useEffect(() => {
-    if (qHandled.current) return;
+    if (qHandled.current || !authChecked) return;
     const q = new URLSearchParams(window.location.search).get("q");
     if (!q || !q.trim()) return;
     qHandled.current = true;
     window.history.replaceState(null, "", window.location.pathname);
+    const text = q.trim().slice(0, 500);
     useClunoid.setState({ started: true });
-    void useClunoid.getState().send(q.trim().slice(0, 500));
-  }, []);
+    const st = useClunoid.getState();
+    if (st.user.isAuthed) {
+      void st.send(text); // already signed in → answer it straight away
+    } else {
+      // Coming from an article/explore: require sign-in first, but keep the
+      // request and auto-send it the moment they're in (never lost).
+      useClunoid.setState({ pendingRequest: text });
+      st.openAuth("signup");
+    }
+  }, [authChecked]);
 
   function handleInput(text: string) {
     setInterim("");

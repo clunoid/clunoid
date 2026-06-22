@@ -3,6 +3,7 @@ import { cache } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getArticle, summarize, SITE } from "@/lib/articles";
+import { AskBar } from "@/components/AskBar";
 import type { Experience } from "@/lib/brain/scene";
 
 // Re-fetched at most every few minutes so updates show without re-deploying.
@@ -49,7 +50,7 @@ export default async function ArticlePage({ params }: Props) {
   };
 
   return (
-    <main className="stage-bg min-h-[100dvh]">
+    <main className="stage-bg min-h-[100dvh] pb-32">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <div className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8">
         <header className="mb-8 flex items-center justify-between">
@@ -87,6 +88,7 @@ export default async function ArticlePage({ params }: Props) {
           </Link>
         </footer>
       </div>
+      <AskBar />
     </main>
   );
 }

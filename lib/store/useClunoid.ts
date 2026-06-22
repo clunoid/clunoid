@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { SpeechPlayer } from "@/lib/voice/speech";
 import { getSupabaseBrowser } from "@/lib/supabase/client";
+import { articleFields } from "@/lib/article-utils";
 import type { Scene, Experience, ExplainerExperience, CalculationExperience } from "@/lib/brain/scene";
 import type { BrainRequest, Turn } from "@/lib/brain/types";
 import {
@@ -89,6 +90,7 @@ type ClunoidStore = {
   historyLog: HistoryEntry[]; // past requests, most-recent first
   historyOpen: boolean; // the full-screen history panel
   pendingRequest: string | null; // a request typed before signing in, replayed after
+  publishedSlugs: string[]; // article slugs this device has already published
 
   setUser: (u: UserState) => void;
   setMicLevel: (v: number) => void;
@@ -104,6 +106,7 @@ type ClunoidStore = {
   closeHistory: () => void;
   restoreHistory: (id: string) => void; // reopen a past request exactly as it was
   deleteHistory: (id: string) => void;
+  syncArticles: () => void; // publish past history to the public corpus (privacy-safe)
 
   greet: () => Promise<void>;
   send: (text: string) => Promise<void>;
@@ -159,6 +162,29 @@ export const useClunoid = create<ClunoidStore>()(
   function stopPlayback() {
     playSeq++; // invalidate any in-flight explainer/speech loop
     getPlayer(set).stop();
+  }
+
+  // Publish a result to the PUBLIC article corpus (deduped per device). NO user
+  // data is ever sent — only the researched topic, content, and media. Same topic
+  // → same slug → the article is UPDATED, never duplicated.
+  function publishToCorpus(exp: Experience, fallbackTitle: string) {
+    const f = articleFields(exp, fallbackTitle);
+    if (!f || get().publishedSlugs.includes(f.slug)) return;
+    set((s) => ({ publishedSlugs: [...s.publishedSlugs, f.slug].slice(-1000) }));
+    void (async () => {
+      try {
+        await getSupabaseBrowser().rpc("upsert_article", {
+          p_slug: f.slug,
+          p_title: f.title,
+          p_summary: f.summary,
+          p_kind: f.kind,
+          p_experience: exp,
+        });
+      } catch {
+        // allow a retry later
+        set((s) => ({ publishedSlugs: s.publishedSlugs.filter((x) => x !== f.slug) }));
+      }
+    })();
   }
 
   // Narrate an explainer beat-by-beat from `start` (visuals sync to each beat).
@@ -235,6 +261,8 @@ export const useClunoid = create<ClunoidStore>()(
         };
         return { historyLog: [entry, ...s.historyLog].slice(0, 60) };
       });
+      // Also publish it as a public, SEO-indexed article (privacy-safe, deduped).
+      publishToCorpus(exp, scene.say);
     }
 
     // Auto-close the profile a few seconds after Isaac opens it, so it never
@@ -303,6 +331,7 @@ export const useClunoid = create<ClunoidStore>()(
     historyLog: [],
     historyOpen: false,
     pendingRequest: null,
+    publishedSlugs: [],
 
     setUser: (u) => set({ user: u }),
     setMicLevel: (v) => set({ micLevel: v }),
@@ -370,6 +399,15 @@ export const useClunoid = create<ClunoidStore>()(
       });
     },
     deleteHistory: (id) => set((s) => ({ historyLog: s.historyLog.filter((h) => h.id !== id) })),
+    syncArticles: () => {
+      let published = 0;
+      for (const h of get().historyLog) {
+        if (published >= 20) break; // gentle: a few per call (dedup makes it one-time)
+        const before = get().publishedSlugs.length;
+        publishToCorpus(h.experience, h.title);
+        if (get().publishedSlugs.length > before) published++;
+      }
+    },
 
     greet: async () => {
       if (get().started) return;
@@ -468,6 +506,7 @@ export const useClunoid = create<ClunoidStore>()(
         caption: s.caption,
         spokenChars: s.spokenChars,
         historyLog: s.historyLog,
+        publishedSlugs: s.publishedSlugs,
       }),
     }
   )
